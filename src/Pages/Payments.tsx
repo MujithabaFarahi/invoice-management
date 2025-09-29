@@ -45,7 +45,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { addPayment, getLastPaymentByCustomerId } from '@/Config/firestore';
+import {
+  addPayment,
+  getLastPaymentByCustomerId,
+  toUtcMidnight,
+} from '@/Config/firestore';
 import {
   type Invoice,
   type Payment,
@@ -401,7 +405,7 @@ export default function Payments() {
       // 1. Add Payment
       const paymentData = {
         paymentNo: formData.paymentNo,
-        date: formData.date,
+        date: toUtcMidnight(formData.date),
         customerId: formData.customerId,
         customerName: customer.name,
         currency: formData.currency,

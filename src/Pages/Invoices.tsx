@@ -48,7 +48,12 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { addInvoice, updateInvoice, deleteInvoice } from '@/Config/firestore';
+import {
+  addInvoice,
+  updateInvoice,
+  deleteInvoice,
+  toUtcMidnight,
+} from '@/Config/firestore';
 import { type Invoice } from '@/Config/types';
 import { toast } from 'sonner';
 import {
@@ -200,7 +205,7 @@ export default function Invoices() {
         balance: totalAmount,
         recievedJPY: 0,
         status: 'pending' as const,
-        date: formData.date,
+        date: toUtcMidnight(formData.date),
         foreignBankCharge: 0,
         localBankCharge: 0,
       };

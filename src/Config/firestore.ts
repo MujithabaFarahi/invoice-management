@@ -14,6 +14,7 @@ import {
   type DocumentData,
   limit,
   startAfter,
+  Timestamp,
 } from 'firebase/firestore';
 import type {
   Currency,
@@ -443,7 +444,7 @@ export const getLastPaymentByCustomerId = async (
 };
 
 // export const migratePaymentDates = async () => {
-//   const snapshot = await getDocs(collection(db, 'invoices'));
+//   const snapshot = await getDocs(collection(db, 'payments'));
 
 //   const updates = snapshot.docs.map(async (d) => {
 //     const data = d.data() as DocumentData;
@@ -467,7 +468,7 @@ export const getLastPaymentByCustomerId = async (
 //         // Convert to Firestore Timestamp
 //         const ts = Timestamp.fromDate(parsedDate);
 
-//         await updateDoc(doc(db, 'invoices', d.id), { date: ts });
+//         await updateDoc(doc(db, 'payments', d.id), { date: ts });
 //         console.log(`✅ Updated ${d.id}: ${data.date} → ${ts.toDate()}`);
 //       } catch (err) {
 //         console.error(`❌ Failed to update ${d.id}:`, err);
@@ -478,3 +479,49 @@ export const getLastPaymentByCustomerId = async (
 //   await Promise.all(updates);
 //   console.log('🎉 Migration complete (idempotent)');
 // };
+
+export const migratePaymentDates = async () => {
+  const snapshot = await getDocs(collection(db, 'payments'));
+
+  const updates = snapshot.docs.map(async (d) => {
+    const data = d.data() as DocumentData;
+
+    let date: Date | null = null;
+
+    if (data.date instanceof Timestamp) {
+      // Already a Timestamp → normalize it
+      date = data.date.toDate();
+    } else if (typeof data.date === 'string') {
+      // Parse string date
+      const parsed = new Date(data.date);
+      if (isNaN(parsed.getTime())) {
+        console.warn(`Skipping invalid date for doc ${d.id}:`, data.date);
+        return;
+      }
+      date = parsed;
+    } else {
+      console.warn(`Skipping unknown date format for doc ${d.id}:`, data.date);
+      return;
+    }
+
+    // Normalize to UTC midnight
+    const utcMidnight = toUtcMidnight(date);
+
+    // Only update if different
+    const newTs = Timestamp.fromDate(utcMidnight);
+    if (!(data.date instanceof Timestamp && data.date.isEqual(newTs))) {
+      await updateDoc(doc(db, 'payments', d.id), { date: newTs });
+      console.log(
+        `✅ Updated ${
+          d.id
+        }: ${date.toISOString()} → ${utcMidnight.toISOString()}`
+      );
+    }
+  });
+
+  await Promise.all(updates);
+  console.log('🎉 Migration complete (idempotent, UTC midnight enforced)');
+};
+
+export const toUtcMidnight = (date: Date) =>
+  new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
