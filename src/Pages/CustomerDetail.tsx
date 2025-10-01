@@ -142,12 +142,18 @@ export default function CustomerDetail() {
     USDPending: 0,
     EURPending: 0,
     JPYPending: 0,
+    USDFBC: 0,
+    EURFBC: 0,
+    JPYFBC: 0,
   });
   useEffect(() => {
     const pending = {
       USDPending: 0,
       EURPending: 0,
       JPYPending: 0,
+      USDFBC: 0,
+      EURFBC: 0,
+      JPYFBC: 0,
     };
 
     customerInvoices
@@ -161,6 +167,16 @@ export default function CustomerDetail() {
           pending.JPYPending += invoice.balance;
         }
       });
+
+    customerInvoices.forEach((invoice) => {
+      if (invoice.currency === 'USD') {
+        pending.USDFBC += invoice.foreignBankCharge;
+      } else if (invoice.currency === 'EUR') {
+        pending.EURFBC += invoice.foreignBankCharge;
+      } else if (invoice.currency === 'JPY') {
+        pending.JPYFBC += invoice.foreignBankCharge;
+      }
+    });
 
     setStats((prev) => ({
       ...prev,
@@ -475,6 +491,40 @@ export default function CustomerDetail() {
                   <p className="text-sm text-muted-foreground">Created At</p>
                   <p className="font-medium">
                     {new Date(customer.createdAt).toLocaleDateString()}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Total LBC</p>
+                  <p className="font-medium">
+                    {new Intl.NumberFormat('ja-JP', {
+                      style: 'currency',
+                      currency: 'JPY',
+                    }).format(
+                      customerInvoices
+                        .map((inv) => inv.localBankCharge)
+                        .reduce((a, b) => a + b, 0)
+                    )}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Total FBC</p>
+                  <p className="font-medium">
+                    <div className=" font-bold">
+                      {new Intl.NumberFormat('ja-JP', {
+                        style: 'currency',
+                        currency: 'JPY',
+                      }).format(stats.JPYFBC)}{' '}
+                      +{' '}
+                      {new Intl.NumberFormat('ja-JP', {
+                        style: 'currency',
+                        currency: 'USD',
+                      }).format(stats.USDFBC)}
+                      +{' '}
+                      {new Intl.NumberFormat('ja-JP', {
+                        style: 'currency',
+                        currency: 'EUR',
+                      }).format(stats.EURFBC)}
+                    </div>
                   </p>
                 </div>
               </div>

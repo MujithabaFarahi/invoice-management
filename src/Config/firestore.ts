@@ -8,12 +8,9 @@ import {
   query,
   where,
   orderBy,
-  writeBatch,
   getDoc,
-  QueryDocumentSnapshot,
   type DocumentData,
   limit,
-  startAfter,
   Timestamp,
 } from 'firebase/firestore';
 import type {
@@ -97,9 +94,11 @@ export const getInvoices = async (): Promise<Invoice[]> => {
   );
   return querySnapshot.docs.map((doc) => {
     const data = doc.data();
+
     return {
       id: doc.id,
       ...data,
+      date: toJapanDate(data.date.toDate()),
       createdAt: data.createdAt.toDate(),
     } as Invoice;
   });
@@ -114,10 +113,11 @@ export const getInvoiceById = async (invoiceId: string): Promise<Invoice> => {
   }
 
   const data = invoiceSnap.data();
+
   return {
     id: invoiceSnap.id,
     ...data,
-    date: data.date.toDate(),
+    date: toJapanDate(data.date.toDate()),
     createdAt: data.createdAt.toDate(),
   } as Invoice;
 };
@@ -143,50 +143,10 @@ export const getCustomerInvoices = async (
     return {
       id: doc.id,
       ...data,
+      date: toJapanDate(data.date.toDate()),
       createdAt: data.createdAt.toDate(),
     } as Invoice;
   });
-};
-
-export const getInvoicesData = async (
-  sortBy: string,
-  ascending: boolean,
-  pageSize: number,
-  lastDoc?: QueryDocumentSnapshot<DocumentData>
-): Promise<{
-  invoices: Invoice[];
-  lastVisible: QueryDocumentSnapshot<DocumentData> | null;
-}> => {
-  const invoicesRef = collection(db, 'invoices');
-  let q = query(
-    invoicesRef,
-    orderBy(sortBy, ascending ? 'asc' : 'desc'),
-    limit(pageSize)
-  );
-
-  if (lastDoc) {
-    q = query(
-      invoicesRef,
-      orderBy(sortBy, ascending ? 'asc' : 'desc'),
-      startAfter(lastDoc),
-      limit(pageSize)
-    );
-  }
-
-  const snapshot = await getDocs(q);
-
-  const invoices = snapshot.docs.map((doc) => {
-    const data = doc.data();
-    return {
-      id: doc.id,
-      ...data,
-      createdAt: data.createdAt.toDate(),
-    } as Invoice;
-  });
-
-  const lastVisible = snapshot.docs[snapshot.docs.length - 1] ?? null;
-
-  return { invoices, lastVisible };
 };
 
 export const updateInvoice = async (id: string, data: Partial<Invoice>) => {
@@ -277,16 +237,22 @@ export const getPaymentCount = async (): Promise<number> => {
   return snapshot.data().count;
 };
 
+export const toJapanDate = (date: Date) => {
+  return new Date(date.getTime() + 9 * 60 * 60 * 1000);
+};
+
 export const getPayments = async (): Promise<Payment[]> => {
   const querySnapshot = await getDocs(
     query(collection(db, 'payments'), orderBy('date', 'desc'))
   );
   return querySnapshot.docs.map((doc) => {
     const data = doc.data();
+    const storedDate = data.date.toDate();
+
     return {
       id: doc.id,
       ...data,
-      date: data.date.toDate(),
+      date: toJapanDate(storedDate),
       createdAt: data.createdAt.toDate(),
     } as Payment;
   });
@@ -301,74 +267,14 @@ export const getPaymentById = async (paymentId: string): Promise<Payment> => {
   }
 
   const data = paymentSnap.data();
+  const storedDate = data.date.toDate();
+
   return {
     id: paymentSnap.id,
     ...data,
-    date: data.date.toDate(),
+    date: toJapanDate(storedDate),
     createdAt: data.createdAt.toDate(),
   } as Payment;
-};
-
-export const allocatePaymentToInvoices = async (
-  paymentId: string,
-  customerId: string,
-  amount: number,
-  currency: string
-) => {
-  const batch = writeBatch(db);
-
-  // Get pending invoices for the customer
-  const invoicesQuery = query(
-    collection(db, 'invoices'),
-    where('customerId', '==', customerId),
-    where('currency', '==', currency),
-    where('status', 'in', ['pending', 'partially_paid']),
-    orderBy('createdAt', 'asc')
-  );
-
-  const invoicesSnapshot = await getDocs(invoicesQuery);
-  let remainingAmount = amount;
-
-  for (const invoiceDoc of invoicesSnapshot.docs) {
-    if (remainingAmount <= 0) break;
-
-    const invoice = invoiceDoc.data() as Invoice;
-    const invoiceBalance = invoice.balance;
-
-    if (invoiceBalance > 0) {
-      const allocationAmount = Math.min(remainingAmount, invoiceBalance);
-      const newAmountPaid = invoice.amountPaid + allocationAmount;
-      const newBalance = invoice.totalAmount - newAmountPaid;
-      const newStatus = newBalance === 0 ? 'paid' : 'partially_paid';
-
-      batch.update(doc(db, 'invoices', invoiceDoc.id), {
-        amountPaid: newAmountPaid,
-        balance: newBalance,
-        status: newStatus,
-      });
-
-      remainingAmount -= allocationAmount;
-    }
-  }
-
-  // Update customer's amount due
-  const customerRef = doc(db, 'customers', customerId);
-  const customerDoc = await getDoc(customerRef);
-  if (customerDoc.exists()) {
-    const currentAmountDue = customerDoc.data().amountDue || 0;
-    const allocatedAmount = amount - remainingAmount;
-    batch.update(customerRef, {
-      amountDue: Math.max(0, toFixed2(currentAmountDue - allocatedAmount)),
-    });
-  }
-
-  // Update payment with allocation info
-  batch.update(doc(db, 'payments', paymentId), {
-    allocatedAmount: amount - remainingAmount,
-    remainingAmount: remainingAmount,
-  });
-
-  await batch.commit();
 };
 
 export const getPaymentAllocations = async (
@@ -439,6 +345,7 @@ export const getLastPaymentByCustomerId = async (
   return {
     id: docSnap.id,
     ...data,
+    date: toJapanDate(data.date.toDate()),
     createdAt: data.createdAt.toDate(),
   } as Payment;
 };
@@ -505,7 +412,7 @@ export const migratePaymentDates = async () => {
     }
 
     // Normalize to UTC midnight
-    const utcMidnight = toUtcMidnight(date);
+    const utcMidnight = toJapanMidnight(date);
 
     // Only update if different
     const newTs = Timestamp.fromDate(utcMidnight);
@@ -523,5 +430,9 @@ export const migratePaymentDates = async () => {
   console.log('🎉 Migration complete (idempotent, UTC midnight enforced)');
 };
 
-export const toUtcMidnight = (date: Date) =>
-  new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+export const toJapanMidnight = (date: Date) => {
+  return new Date(
+    Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0) -
+      9 * 60 * 60 * 1000
+  );
+};

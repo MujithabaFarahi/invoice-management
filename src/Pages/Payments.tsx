@@ -48,7 +48,7 @@ import {
 import {
   addPayment,
   getLastPaymentByCustomerId,
-  toUtcMidnight,
+  toJapanMidnight,
 } from '@/Config/firestore';
 import {
   type Invoice,
@@ -252,69 +252,6 @@ export default function Payments() {
     dispatch(setSelectedInvoices(allocations));
   };
 
-  // const allocatePaymentToInvoices = (
-  //   value: string,
-  //   rate: string,
-  //   fbc: string,
-  //   lbc: string
-  // ) => {
-  //   const amount = toFixed2(value ?? 0);
-  //   const exchangeRate = toFixed2(rate || '0');
-  //   const foreignBankCharge = toFixed2(fbc || '0');
-  //   const localBankCharge = toFixed2(lbc || '0');
-
-  //   if (customerInvoices.length === 0 || isNaN(exchangeRate)) return;
-
-  //   let remaining = amount;
-  //   let totalJPY = 0;
-
-  //   const allocations = customerInvoices.map((inv, index) => {
-  //     if (remaining <= 0) {
-  //       return {
-  //         invoiceId: inv.id,
-  //         allocatedAmount: 0,
-  //         balance: inv.balance,
-  //         foreignBankCharge: 0,
-  //         localBankCharge: 0,
-  //         recievedJPY: 0,
-  //       };
-  //     }
-
-  //     const alloc = toFixed2(Math.min(remaining, inv.balance));
-  //     remaining = toFixed2(remaining - alloc);
-
-  //     let adjustedAlloc = alloc;
-  //     if (index === 0) adjustedAlloc = toFixed2(alloc - foreignBankCharge);
-
-  //     const recievedJPY = Math.floor(adjustedAlloc * exchangeRate);
-  //     totalJPY += recievedJPY;
-
-  //     return {
-  //       invoiceId: inv.id,
-  //       allocatedAmount: alloc,
-  //       balance: inv.balance,
-  //       foreignBankCharge: index === 0 ? foreignBankCharge : 0,
-  //       localBankCharge: index === 0 ? localBankCharge : 0,
-  //       recievedJPY,
-  //     };
-  //   });
-
-  //   const totalFormJPY =
-  //     Math.floor((amount - foreignBankCharge) * exchangeRate) - localBankCharge;
-  //   const diff = totalFormJPY - totalJPY;
-
-  //   setFormData((prev) => ({
-  //     ...prev,
-  //     JPYamount: totalFormJPY.toString(),
-  //   }));
-
-  //   if (allocations.length > 0) {
-  //     allocations[0].recievedJPY += diff; // Adjust for rounding error
-  //   }
-
-  //   dispatch(setSelectedInvoices(allocations));
-  // };
-
   const generatePaymentNo = () => {
     const timestamp = Date.now().toString().slice(-6);
     return `PAY-${timestamp}`;
@@ -405,7 +342,7 @@ export default function Payments() {
       // 1. Add Payment
       const paymentData = {
         paymentNo: formData.paymentNo,
-        date: toUtcMidnight(formData.date),
+        date: toJapanMidnight(formData.date),
         customerId: formData.customerId,
         customerName: customer.name,
         currency: formData.currency,

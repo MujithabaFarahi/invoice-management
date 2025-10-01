@@ -52,7 +52,8 @@ import {
   addInvoice,
   updateInvoice,
   deleteInvoice,
-  toUtcMidnight,
+  toJapanMidnight,
+  toJapanDate,
 } from '@/Config/firestore';
 import { type Invoice } from '@/Config/types';
 import { toast } from 'sonner';
@@ -130,7 +131,7 @@ export default function Invoices() {
       const invoices = snapshot.docs.map((doc) => ({
         id: doc.id,
         ...doc.data(),
-        date: doc.data().date.toDate(),
+        date: toJapanDate(doc.data().date.toDate()),
         createdAt: doc.data().createdAt.toDate(),
       })) as Invoice[];
 
@@ -205,7 +206,7 @@ export default function Invoices() {
         balance: totalAmount,
         recievedJPY: 0,
         status: 'pending' as const,
-        date: toUtcMidnight(formData.date),
+        date: toJapanMidnight(formData.date),
         foreignBankCharge: 0,
         localBankCharge: 0,
       };

@@ -43,6 +43,7 @@ export interface Payment {
   id: string;
   paymentNo: string;
   date: Date;
+  paymentDate?: Date;
   customerId: string;
   customerName: string;
   currency: string;
