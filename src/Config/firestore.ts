@@ -388,7 +388,7 @@ export const getLastPaymentByCustomerId = async (
 // };
 
 export const migratePaymentDates = async () => {
-  const snapshot = await getDocs(collection(db, 'payments'));
+  const snapshot = await getDocs(collection(db, 'invoices'));
 
   const updates = snapshot.docs.map(async (d) => {
     const data = d.data() as DocumentData;
@@ -417,7 +417,7 @@ export const migratePaymentDates = async () => {
     // Only update if different
     const newTs = Timestamp.fromDate(utcMidnight);
     if (!(data.date instanceof Timestamp && data.date.isEqual(newTs))) {
-      await updateDoc(doc(db, 'payments', d.id), { date: newTs });
+      await updateDoc(doc(db, 'invoices', d.id), { date: newTs });
       console.log(
         `✅ Updated ${
           d.id

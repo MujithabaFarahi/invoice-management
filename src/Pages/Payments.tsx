@@ -161,6 +161,7 @@ export default function Payments() {
     exchangeRate: '',
     currency: 'USD',
     date: new Date(),
+    paymentDate: undefined as Date | undefined,
   });
 
   const [selectedCustomers, setSelectedCustomers] = useState<string[]>([]);
@@ -343,6 +344,9 @@ export default function Payments() {
       const paymentData = {
         paymentNo: formData.paymentNo,
         date: toJapanMidnight(formData.date),
+        paymentDate: formData.paymentDate
+          ? toJapanMidnight(formData.paymentDate)
+          : undefined,
         customerId: formData.customerId,
         customerName: customer.name,
         currency: formData.currency,
@@ -465,6 +469,7 @@ export default function Payments() {
         currency: 'USD',
         exchangeRate: '',
         date: new Date(),
+        paymentDate: undefined,
       });
       dispatch(setSelectedInvoices([]));
     } catch (error) {
@@ -678,7 +683,7 @@ export default function Payments() {
       },
       cell: ({ row }) => (
         <div className="capitalize">
-          {new Date(row.getValue('date')).toLocaleDateString()}
+          {new Date(row.getValue('date')).toLocaleDateString('ja-JP')}
         </div>
       ),
     },
@@ -885,6 +890,7 @@ export default function Payments() {
                   foreignBankCharge: '',
                   currency: 'USD',
                   date: new Date(),
+                  paymentDate: undefined,
                 });
                 dispatch(resetCustomerInvoices());
               }}
@@ -919,35 +925,67 @@ export default function Payments() {
                     required
                   />
                 </div>
-                <div className="grid gap-2">
-                  <Label>Date</Label>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant={'outline'}
-                        className="w-full justify-start text-left font-normal"
-                      >
-                        <CalendarIcon className="mr-2 h-4 w-4" />
-                        {formData.date ? (
-                          format(formData.date, 'PPP')
-                        ) : (
-                          <span>Pick a date</span>
-                        )}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent align="start" className="w-auto p-0">
-                      <Calendar
-                        mode="single"
-                        selected={formData.date}
-                        captionLayout="dropdown"
-                        onSelect={(date) => {
-                          if (date) {
-                            setFormData({ ...formData, date });
-                          }
-                        }}
-                      />
-                    </PopoverContent>
-                  </Popover>
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label>Date</Label>
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant={'outline'}
+                          className="w-full justify-start text-left font-normal"
+                        >
+                          <CalendarIcon className="mr-2 h-4 w-4" />
+                          {formData.date ? (
+                            format(formData.date, 'PPP')
+                          ) : (
+                            <span>Pick a date</span>
+                          )}
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent align="start" className="w-auto p-0">
+                        <Calendar
+                          mode="single"
+                          selected={formData.date}
+                          captionLayout="dropdown"
+                          onSelect={(date) => {
+                            if (date) {
+                              setFormData({ ...formData, date });
+                            }
+                          }}
+                        />
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>Payment Date</Label>
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant={'outline'}
+                          className="w-full justify-start text-left font-normal"
+                        >
+                          <CalendarIcon className="mr-2 h-4 w-4" />
+                          {formData.paymentDate ? (
+                            format(formData.paymentDate, 'PPP')
+                          ) : (
+                            <span>Pick a date</span>
+                          )}
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent align="start" className="w-auto p-0">
+                        <Calendar
+                          mode="single"
+                          selected={formData.paymentDate}
+                          captionLayout="dropdown"
+                          onSelect={(date) => {
+                            if (date) {
+                              setFormData({ ...formData, paymentDate: date });
+                            }
+                          }}
+                        />
+                      </PopoverContent>
+                    </Popover>
+                  </div>
                 </div>
                 <div className="flex flex-col md:flex-row gap-4 justify-between">
                   <div className="flex gap-4 ">

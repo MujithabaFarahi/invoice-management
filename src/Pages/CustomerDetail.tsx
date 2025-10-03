@@ -257,7 +257,7 @@ export default function CustomerDetail() {
       },
       cell: ({ row }) => (
         <div className="capitalize">
-          {new Date(row.getValue('date')).toLocaleDateString()}
+          {new Date(row.getValue('date')).toLocaleDateString('ja-JP')}
         </div>
       ),
     },
@@ -490,7 +490,7 @@ export default function CustomerDetail() {
                 <div>
                   <p className="text-sm text-muted-foreground">Created At</p>
                   <p className="font-medium">
-                    {new Date(customer.createdAt).toLocaleDateString()}
+                    {new Date(customer.createdAt).toLocaleDateString('ja-JP')}
                   </p>
                 </div>
                 <div>
@@ -508,24 +508,22 @@ export default function CustomerDetail() {
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Total FBC</p>
-                  <p className="font-medium">
-                    <div className=" font-bold">
-                      {new Intl.NumberFormat('ja-JP', {
-                        style: 'currency',
-                        currency: 'JPY',
-                      }).format(stats.JPYFBC)}{' '}
-                      +{' '}
-                      {new Intl.NumberFormat('ja-JP', {
-                        style: 'currency',
-                        currency: 'USD',
-                      }).format(stats.USDFBC)}
-                      +{' '}
-                      {new Intl.NumberFormat('ja-JP', {
-                        style: 'currency',
-                        currency: 'EUR',
-                      }).format(stats.EURFBC)}
-                    </div>
-                  </p>
+                  <div className="font-medium">
+                    {new Intl.NumberFormat('ja-JP', {
+                      style: 'currency',
+                      currency: 'JPY',
+                    }).format(stats.JPYFBC)}{' '}
+                    +{' '}
+                    {new Intl.NumberFormat('ja-JP', {
+                      style: 'currency',
+                      currency: 'USD',
+                    }).format(stats.USDFBC)}
+                    +{' '}
+                    {new Intl.NumberFormat('ja-JP', {
+                      style: 'currency',
+                      currency: 'EUR',
+                    }).format(stats.EURFBC)}
+                  </div>
                 </div>
               </div>
             </CardContent>

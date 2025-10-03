@@ -285,7 +285,7 @@ export default function Customers() {
     //   },
     //   cell: ({ row }) => (
     //     <div className="capitalize">
-    //       {new Date(row.getValue('createdAt')).toLocaleDateString()}
+    //       {new Date(row.getValue('createdAt')).toLocaleDateString('ja-JP')}
     //     </div>
     //   ),
     // },

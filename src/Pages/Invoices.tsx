@@ -347,7 +347,7 @@ export default function Invoices() {
       },
       cell: ({ row }) => (
         <div className="capitalize">
-          {new Date(row.getValue('date')).toLocaleDateString()}
+          {new Date(row.getValue('date')).toLocaleDateString('ja-JP')}
         </div>
       ),
     },
