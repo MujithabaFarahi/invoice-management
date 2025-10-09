@@ -125,7 +125,11 @@ export default function Invoices() {
 
   const listenToInvoices = (dispatch: AppDispatch) => {
     const invoicesRef = collection(db, 'invoices');
-    const q = query(invoicesRef, orderBy('date', 'desc'));
+    const q = query(
+      invoicesRef,
+      orderBy('date', 'desc'),
+      orderBy('createdAt', 'desc')
+    );
 
     const unsub = onSnapshot(q, (snapshot) => {
       const invoices = snapshot.docs.map((doc) => ({
