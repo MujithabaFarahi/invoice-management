@@ -927,36 +927,6 @@ export default function Payments() {
                 </div>
                 <div className="grid md:grid-cols-2 gap-4">
                   <div className="grid gap-2">
-                    <Label>Date</Label>
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <Button
-                          variant={'outline'}
-                          className="w-full justify-start text-left font-normal"
-                        >
-                          <CalendarIcon className="mr-2 h-4 w-4" />
-                          {formData.date ? (
-                            format(formData.date, 'PPP')
-                          ) : (
-                            <span>Pick a date</span>
-                          )}
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent align="start" className="w-auto p-0">
-                        <Calendar
-                          mode="single"
-                          selected={formData.date}
-                          captionLayout="dropdown"
-                          onSelect={(date) => {
-                            if (date) {
-                              setFormData({ ...formData, date });
-                            }
-                          }}
-                        />
-                      </PopoverContent>
-                    </Popover>
-                  </div>
-                  <div className="grid gap-2">
                     <Label>Payment Date</Label>
                     <Popover>
                       <PopoverTrigger asChild>
@@ -980,6 +950,36 @@ export default function Payments() {
                           onSelect={(date) => {
                             if (date) {
                               setFormData({ ...formData, paymentDate: date });
+                            }
+                          }}
+                        />
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>CreditDate</Label>
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant={'outline'}
+                          className="w-full justify-start text-left font-normal"
+                        >
+                          <CalendarIcon className="mr-2 h-4 w-4" />
+                          {formData.date ? (
+                            format(formData.date, 'PPP')
+                          ) : (
+                            <span>Pick a date</span>
+                          )}
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent align="start" className="w-auto p-0">
+                        <Calendar
+                          mode="single"
+                          selected={formData.date}
+                          captionLayout="dropdown"
+                          onSelect={(date) => {
+                            if (date) {
+                              setFormData({ ...formData, date });
                             }
                           }}
                         />

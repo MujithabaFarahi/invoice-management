@@ -90,7 +90,7 @@ export const getInvoiceCount = async (): Promise<number> => {
 
 export const getInvoices = async (): Promise<Invoice[]> => {
   const querySnapshot = await getDocs(
-    query(collection(db, 'invoices'), orderBy('createdAt', 'desc'))
+    query(collection(db, 'invoices'), orderBy('date', 'desc'))
   );
   return querySnapshot.docs.map((doc) => {
     const data = doc.data();
@@ -133,7 +133,7 @@ export const getCustomerInvoices = async (
     where('customerId', '==', customerId),
     where('currency', '==', currency),
     where('balance', '>', 0),
-    orderBy('createdAt', 'asc')
+    orderBy('date', 'asc')
   );
 
   const querySnapshot = await getDocs(q);
@@ -332,7 +332,7 @@ export const getLastPaymentByCustomerId = async (
   const paymentsQuery = query(
     collection(db, 'payments'),
     where('customerId', '==', customerId),
-    orderBy('createdAt', 'desc'),
+    orderBy('date', 'desc'),
     limit(1)
   );
 
