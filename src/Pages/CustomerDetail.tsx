@@ -296,19 +296,7 @@ export default function CustomerDetail() {
         return <div>{formatted}</div>;
       },
     },
-    {
-      accessorKey: 'amountPaid',
-      header: 'Paid',
-      cell: ({ row }) => {
-        const amount = toFixed2(row.getValue('amountPaid'));
-        // Format the amount as a dollar amount
-        const formatted = new Intl.NumberFormat('en-US', {
-          style: 'currency',
-          currency: row.getValue('currency') || 'USD',
-        }).format(amount);
-        return <div>{formatted}</div>;
-      },
-    },
+
     {
       accessorKey: 'balance',
       header: () => <div>Balance</div>,
@@ -330,6 +318,82 @@ export default function CustomerDetail() {
         );
       },
     },
+
+    {
+      accessorKey: 'amountPaid',
+      header: 'Paid',
+      cell: ({ row }) => {
+        const amount = toFixed2(row.getValue('amountPaid'));
+        // Format the amount as a dollar amount
+        const formatted = new Intl.NumberFormat('en-US', {
+          style: 'currency',
+          currency: row.getValue('currency') || 'USD',
+        }).format(amount);
+        return <div>{formatted}</div>;
+      },
+    },
+
+    {
+      accessorKey: 'recievedJPY',
+      header: 'Received JPY',
+      cell: ({ row }) => {
+        const amount = toFixed2(row.getValue('recievedJPY'));
+        // Format the amount as a dollar amount
+        const formatted = new Intl.NumberFormat('en-US', {
+          style: 'currency',
+          currency: 'JPY',
+        }).format(amount);
+        return <div>{formatted}</div>;
+      },
+    },
+    {
+      accessorKey: 'foreignBankCharge',
+      header: '',
+      enableHiding: true,
+      cell: () => null,
+    },
+
+    {
+      accessorKey: 'localBankCharge',
+      header: 'Bank Charge Pending',
+      cell: ({ row }) => {
+        const fcb = toFixed2(row.getValue('foreignBankCharge'));
+        const lcb = toFixed2(row.getValue('localBankCharge'));
+
+        const totalBankCharge = fcb + lcb;
+
+        // Format the amount as a dollar amount
+        const ffcb = new Intl.NumberFormat('en-US', {
+          style: 'currency',
+          currency: row.getValue('currency') || 'USD',
+        }).format(fcb);
+
+        const flcb = new Intl.NumberFormat('en-US', {
+          style: 'currency',
+          currency: 'JPY',
+        }).format(lcb);
+
+        return (
+          <div className="w-full text-center">
+            {row.getValue('currency') === 'JPY' ? (
+              <div>
+                {new Intl.NumberFormat('en-US', {
+                  style: 'currency',
+                  currency: 'JPY',
+                }).format(totalBankCharge)}
+              </div>
+            ) : (
+              <div className="space-y-0.5">
+                {' '}
+                <div>{ffcb}</div>
+                <div>{flcb}</div>
+              </div>
+            )}
+          </div>
+        );
+      },
+    },
+
     {
       accessorKey: 'status',
       header: () => <div className="text-center">Status</div>,
