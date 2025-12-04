@@ -298,6 +298,20 @@ export default function CustomerDetail() {
     },
 
     {
+      accessorKey: 'amountPaid',
+      header: 'Paid',
+      cell: ({ row }) => {
+        const amount = toFixed2(row.getValue('amountPaid'));
+        // Format the amount as a dollar amount
+        const formatted = new Intl.NumberFormat('en-US', {
+          style: 'currency',
+          currency: row.getValue('currency') || 'USD',
+        }).format(amount);
+        return <div>{formatted}</div>;
+      },
+    },
+
+    {
       accessorKey: 'balance',
       header: () => <div>Balance</div>,
       cell: ({ row }) => {
@@ -320,20 +334,6 @@ export default function CustomerDetail() {
     },
 
     {
-      accessorKey: 'amountPaid',
-      header: 'Paid',
-      cell: ({ row }) => {
-        const amount = toFixed2(row.getValue('amountPaid'));
-        // Format the amount as a dollar amount
-        const formatted = new Intl.NumberFormat('en-US', {
-          style: 'currency',
-          currency: row.getValue('currency') || 'USD',
-        }).format(amount);
-        return <div>{formatted}</div>;
-      },
-    },
-
-    {
       accessorKey: 'recievedJPY',
       header: 'Received JPY',
       cell: ({ row }) => {
@@ -350,6 +350,7 @@ export default function CustomerDetail() {
       accessorKey: 'foreignBankCharge',
       header: '',
       enableHiding: true,
+
       cell: () => null,
     },
 
