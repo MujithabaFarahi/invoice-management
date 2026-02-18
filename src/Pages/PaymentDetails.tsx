@@ -70,14 +70,22 @@ export default function PaymentDetails() {
           {payment && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <p className="text-sm text-muted-foreground">Customer</p>
-                <p className="font-medium">{payment.customerName}</p>
+                <p className="text-sm text-muted-foreground">Payment Date</p>
+                <p className="font-medium">
+                  {payment.paymentDate
+                    ? payment.paymentDate.toLocaleDateString('ja-JP')
+                    : '-'}
+                </p>
               </div>
               <div>
-                <p className="text-sm text-muted-foreground">Date</p>
+                <p className="text-sm text-muted-foreground">Credit Date</p>
                 <p className="font-medium">
                   {payment.date.toLocaleDateString('ja-JP')}
                 </p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Customer</p>
+                <p className="font-medium">{payment.customerName}</p>
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Currency</p>
@@ -103,7 +111,15 @@ export default function PaymentDetails() {
                   }).format(payment.foreignBankCharge)}
                 </p>
               </div>
-
+              <div>
+                <p className="text-sm text-muted-foreground">Amount In JPY</p>
+                <p className="font-medium">
+                  {new Intl.NumberFormat('en-US', {
+                    style: 'currency',
+                    currency: 'JPY',
+                  }).format(payment.amountInJPY + (payment.localBankCharge || 0))}
+                </p>
+              </div>
               <div>
                 <p className="text-sm text-muted-foreground">Exchange Rate</p>
                 <p className="font-medium">{payment.exchangeRate}</p>

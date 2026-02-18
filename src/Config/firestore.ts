@@ -262,6 +262,7 @@ export const getPayments = async (): Promise<Payment[]> => {
       id: doc.id,
       ...data,
       date: toJapanDate(storedDate),
+      paymentDate: data.paymentDate ? toJapanDate(data.paymentDate.toDate()) : undefined,
       createdAt: data.createdAt.toDate(),
     } as Payment;
   });
@@ -282,6 +283,7 @@ export const getPaymentById = async (paymentId: string): Promise<Payment> => {
     id: paymentSnap.id,
     ...data,
     date: toJapanDate(storedDate),
+    paymentDate: data.paymentDate ? toJapanDate(data.paymentDate.toDate()) : undefined,
     createdAt: data.createdAt.toDate(),
   } as Payment;
 };
@@ -355,6 +357,7 @@ export const getLastPaymentByCustomerId = async (
     id: docSnap.id,
     ...data,
     date: toJapanDate(data.date.toDate()),
+    paymentDate: data.paymentDate ? toJapanDate(data.paymentDate.toDate()) : undefined,
     createdAt: data.createdAt.toDate(),
   } as Payment;
 };

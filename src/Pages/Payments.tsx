@@ -38,6 +38,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Select,
   SelectContent,
@@ -46,7 +47,6 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
-  addPayment,
   getLastPaymentByCustomerId,
   toJapanMidnight,
 } from '@/Config/firestore';
@@ -54,6 +54,7 @@ import {
   type Invoice,
   type Payment,
   type PaymentAllocation,
+  type SelectedInvoice,
 } from '@/Config/types';
 import { toast } from 'sonner';
 import {
@@ -161,11 +162,13 @@ export default function Payments() {
     exchangeRate: '',
     currency: 'USD',
     date: new Date(),
-    paymentDate: undefined as Date | undefined,
+    paymentDate: new Date(),
   });
 
   const [selectedCustomers, setSelectedCustomers] = useState<string[]>([]);
   const [selectedCurrencies, setSelectedCurrencies] = useState<string[]>([]);
+  const [bankChargeInvoiceId, setBankChargeInvoiceId] = useState('');
+  const [autoAllocate, setAutoAllocate] = useState(true);
 
   useEffect(() => {
     if (formData.customerId && formData.currency) {
@@ -178,79 +181,185 @@ export default function Payments() {
     }
   }, [formData.customerId, formData.currency, dispatch]);
 
+  useEffect(() => {
+    if (customerInvoices.length === 0) {
+      setBankChargeInvoiceId('');
+      return;
+    }
+    setBankChargeInvoiceId((current) => {
+      if (current && customerInvoices.some((inv) => inv.id === current)) {
+        return current;
+      }
+      return customerInvoices[0].id;
+    });
+  }, [customerInvoices]);
+
   const getTotalDue = () => {
     const total = customerInvoices.reduce((sum, inv) => sum + inv.balance, 0);
     return toFixed2(total);
   };
 
-  const allocatePaymentToInvoices = (
-    value: string, // amount in foreign currency
-    jpyAmount: string, // target amount in JPY
+  const getPaymentMetrics = (
+    value: string,
+    jpyAmount: string,
     fbc: string,
     lbc: string
   ) => {
-    const amount = toFixed2(value ?? 0);
-    const jpy = parseFloat(jpyAmount || '0');
+    const amount = toFixed2(value || '0');
+    const jpy = toFixed2(jpyAmount || '0');
     const foreignBankCharge = toFixed2(fbc || '0');
     const localBankCharge = toFixed2(lbc || '0');
-
-    if (customerInvoices.length === 0 || amount === 0) return;
-
-    // ➤ derive exchange rate
     const effectiveAmount = toFixed2(amount - foreignBankCharge);
     const exchangeRate = effectiveAmount > 0 ? jpy / effectiveAmount : 0;
+    const totalFormJPY = toFixed2(jpy - localBankCharge);
 
-    let remaining = amount;
+    return {
+      amount,
+      foreignBankCharge,
+      localBankCharge,
+      exchangeRate: toFixed2(exchangeRate),
+      totalFormJPY,
+    };
+  };
+
+  const applyAllocationMath = (
+    baseAllocations: SelectedInvoice[],
+    metrics: ReturnType<typeof getPaymentMetrics>,
+    preferredChargeInvoiceId: string
+  ) => {
+    const fallbackChargeInvoiceId =
+      baseAllocations.find((a) => a.allocatedAmount > 0)?.invoiceId || '';
+    const chargeInvoiceId =
+      preferredChargeInvoiceId &&
+      baseAllocations.some((a) => a.invoiceId === preferredChargeInvoiceId)
+        ? preferredChargeInvoiceId
+        : fallbackChargeInvoiceId;
+
     let totalJPY = 0;
-
-    const allocations = customerInvoices.map((inv, index) => {
-      if (remaining <= 0) {
-        return {
-          invoiceId: inv.id,
-          allocatedAmount: 0,
-          balance: inv.balance,
-          foreignBankCharge: 0,
-          localBankCharge: 0,
-          recievedJPY: 0,
-        };
-      }
-
-      const alloc = toFixed2(Math.min(remaining, inv.balance));
-      remaining = toFixed2(remaining - alloc);
-
-      let adjustedAlloc = alloc;
-      if (index === 0) adjustedAlloc = toFixed2(alloc - foreignBankCharge);
-
-      const recievedJPY = Math.floor(adjustedAlloc * exchangeRate);
+    const allocations = baseAllocations.map((alloc) => {
+      const isChargeInvoice = alloc.invoiceId === chargeInvoiceId;
+      const adjustedAlloc = toFixed2(
+        alloc.allocatedAmount - (isChargeInvoice ? metrics.foreignBankCharge : 0)
+      );
+      const grossJPY =
+        alloc.allocatedAmount > 0
+          ? Math.floor(adjustedAlloc * metrics.exchangeRate)
+          : 0;
+      const recievedJPY = isChargeInvoice
+        ? toFixed2(grossJPY - metrics.localBankCharge)
+        : grossJPY;
       totalJPY += recievedJPY;
 
       return {
-        invoiceId: inv.id,
-        allocatedAmount: alloc,
-        balance: inv.balance,
-        foreignBankCharge: index === 0 ? foreignBankCharge : 0,
-        localBankCharge: index === 0 ? localBankCharge : 0,
+        ...alloc,
+        foreignBankCharge: isChargeInvoice ? metrics.foreignBankCharge : 0,
+        localBankCharge: isChargeInvoice ? metrics.localBankCharge : 0,
         recievedJPY,
       };
     });
 
-    const totalFormJPY =
-      Math.round((amount - foreignBankCharge) * exchangeRate) - localBankCharge;
-    const diff = totalFormJPY - totalJPY;
-
-    const exRate = toFixed2(exchangeRate);
-
-    setFormData((prev) => ({
-      ...prev,
-      exchangeRate: exRate.toString(),
-      receivedJPY: totalFormJPY.toString(),
-    }));
-
-    if (allocations.length > 0) {
-      allocations[0].recievedJPY += diff; // fix rounding diff
+    const totalAllocated = toFixed2(
+      baseAllocations.reduce((sum, alloc) => sum + alloc.allocatedAmount, 0)
+    );
+    // Only force rounding reconciliation when the full payment amount is allocated.
+    // During partial/manual allocation, keep per-invoice JPY responsive to user edits.
+    if (totalAllocated === metrics.amount) {
+      const diff = metrics.totalFormJPY - totalJPY;
+      const chargeIndex = allocations.findIndex(
+        (a) => a.invoiceId === chargeInvoiceId && a.allocatedAmount > 0
+      );
+      const fallbackIndex = allocations.findIndex((a) => a.allocatedAmount > 0);
+      const adjustIndex = chargeIndex !== -1 ? chargeIndex : fallbackIndex;
+      if (adjustIndex !== -1) {
+        allocations[adjustIndex].recievedJPY += diff;
+      }
     }
 
-    dispatch(setSelectedInvoices(allocations));
+    return { allocations, chargeInvoiceId };
+  };
+
+  const refreshComputedValues = (
+    nextFormData: typeof formData,
+    allocations: SelectedInvoice[],
+    preferredChargeInvoiceId: string
+  ) => {
+    const metrics = getPaymentMetrics(
+      nextFormData.amount,
+      nextFormData.JPYamount,
+      nextFormData.foreignBankCharge,
+      nextFormData.localBankCharge
+    );
+    const { allocations: recalculated, chargeInvoiceId } = applyAllocationMath(
+      allocations,
+      metrics,
+      preferredChargeInvoiceId
+    );
+
+    setFormData({
+      ...nextFormData,
+      exchangeRate: metrics.exchangeRate.toString(),
+      receivedJPY: metrics.totalFormJPY.toString(),
+    });
+    dispatch(setSelectedInvoices(recalculated));
+    if (chargeInvoiceId && chargeInvoiceId !== bankChargeInvoiceId) {
+      setBankChargeInvoiceId(chargeInvoiceId);
+    }
+  };
+
+  const handleAutoAllocate = (
+    nextFormData: typeof formData = formData,
+    forceOldestChargeInvoice = false
+  ) => {
+    if (!customerInvoices.length) {
+      refreshComputedValues(nextFormData, selectedInvoices, bankChargeInvoiceId);
+      return;
+    }
+
+    const amount = toFixed2(nextFormData.amount || '0');
+    let remaining = amount;
+
+    const baseAllocations: SelectedInvoice[] = customerInvoices.map((inv) => {
+      const allocatedAmount =
+        remaining > 0 ? toFixed2(Math.min(remaining, inv.balance)) : 0;
+      remaining = toFixed2(remaining - allocatedAmount);
+      return {
+        invoiceId: inv.id,
+        allocatedAmount,
+        balance: inv.balance,
+        foreignBankCharge: 0,
+        localBankCharge: 0,
+        recievedJPY: 0,
+      };
+    });
+
+    const firstAllocatedInvoiceId =
+      baseAllocations.find((a) => a.allocatedAmount > 0)?.invoiceId || '';
+    const preferredChargeInvoiceId =
+      !forceOldestChargeInvoice &&
+      bankChargeInvoiceId &&
+      baseAllocations.some((a) => a.invoiceId === bankChargeInvoiceId)
+        ? bankChargeInvoiceId
+        : firstAllocatedInvoiceId;
+    setBankChargeInvoiceId(preferredChargeInvoiceId);
+    refreshComputedValues(nextFormData, baseAllocations, preferredChargeInvoiceId);
+  };
+
+  const handleAllocationChange = (invoiceId: string, value: string) => {
+    const nextAmount = toFixed2(value || '0');
+    const updatedAllocations = selectedInvoices.map((alloc) => {
+      if (alloc.invoiceId !== invoiceId) return alloc;
+      const boundedAmount = Math.max(0, Math.min(nextAmount, alloc.balance));
+      return {
+        ...alloc,
+        allocatedAmount: boundedAmount,
+      };
+    });
+
+    const preferredChargeInvoiceId =
+      bankChargeInvoiceId ||
+      updatedAllocations.find((a) => a.allocatedAmount > 0)?.invoiceId ||
+      '';
+    refreshComputedValues(formData, updatedAllocations, preferredChargeInvoiceId);
   };
 
   const generatePaymentNo = () => {
@@ -265,6 +374,7 @@ export default function Payments() {
       !formData.paymentNo ||
       !formData.customerId ||
       !formData.amount ||
+      !formData.paymentDate ||
       selectedInvoices.length === 0
     ) {
       toast.error('Error', {
@@ -284,6 +394,14 @@ export default function Payments() {
 
     const localBankCharge = toFixed2(formData.localBankCharge) || 0;
     const foreignBankCharge = toFixed2(formData.foreignBankCharge) || 0;
+    const hasBankCharge = localBankCharge > 0 || foreignBankCharge > 0;
+
+    if (hasBankCharge && !bankChargeInvoiceId) {
+      toast.error('Error', {
+        description: 'Please select a bank charge invoice.',
+      });
+      return;
+    }
 
     const nonZeroAllocations = selectedInvoices
       .filter((i) => i.allocatedAmount > 0)
@@ -329,24 +447,38 @@ export default function Payments() {
       return;
     }
 
-    // 2. Check totalAllocated === amount
-    if (totalAllocated !== amount) {
-      toast.error('Error', {
-        description: 'Allocated amount must exactly match the payment amount.',
-      });
-      return;
+    if (hasBankCharge) {
+      const bankChargeAllocation = nonZeroAllocations.find(
+        (alloc) => alloc.invoiceId === bankChargeInvoiceId
+      );
+      if (!bankChargeAllocation) {
+        toast.error('Error', {
+          description:
+            'The selected bank charge invoice must have an allocated amount.',
+        });
+        return;
+      }
+      if (bankChargeAllocation.allocatedAmount < foreignBankCharge) {
+        toast.error('Error', {
+          description:
+            'Bank charge invoice allocation must be at least the foreign bank charge.',
+        });
+        return;
+      }
     }
 
     try {
       setIsLoading(true);
 
-      // 1. Add Payment
+      // 1. Prepare atomic write batch
+      const batch = writeBatch(db);
+      const paymentRef = doc(collection(db, 'payments'));
+
+      // 2. Prepare Payment
       const paymentData = {
         paymentNo: formData.paymentNo,
         date: toJapanMidnight(formData.date),
-        paymentDate: formData.paymentDate
-          ? toJapanMidnight(formData.paymentDate)
-          : undefined,
+        paymentDate: toJapanMidnight(formData.paymentDate),
         customerId: formData.customerId,
         customerName: customer.name,
         currency: formData.currency,
@@ -359,10 +491,10 @@ export default function Payments() {
         createdAt: new Date(),
       };
 
-      const paymentId = await addPayment(paymentData);
+      const paymentId = paymentRef.id;
+      batch.set(paymentRef, paymentData);
 
-      // 2. Allocate to Invoices
-      const batch = writeBatch(db);
+      // 3. Allocate to Invoices
       for (const alloc of nonZeroAllocations) {
         const invoiceRef = doc(db, 'invoices', alloc.invoiceId);
         const invoiceSnap = await getDoc(invoiceRef);
@@ -469,8 +601,10 @@ export default function Payments() {
         currency: 'USD',
         exchangeRate: '',
         date: new Date(),
-        paymentDate: undefined,
+        paymentDate: new Date(),
       });
+      setBankChargeInvoiceId('');
+      setAutoAllocate(true);
       dispatch(setSelectedInvoices([]));
     } catch (error) {
       console.error('Error recording payment:', error);
@@ -669,6 +803,29 @@ export default function Payments() {
       ),
     },
     {
+      accessorKey: 'paymentDate',
+      header: ({ column }) => {
+        return (
+          <Button
+            variant="ghost"
+            onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
+          >
+            Payment Date
+            <ArrowUpDown />
+          </Button>
+        );
+      },
+      cell: ({ row }) => {
+        const value = row.getValue('paymentDate');
+        if (!value) return <div>-</div>;
+        return (
+          <div className="capitalize">
+            {new Date(value as string | number | Date).toLocaleDateString('ja-JP')}
+          </div>
+        );
+      },
+    },
+    {
       accessorKey: 'date',
       header: ({ column }) => {
         return (
@@ -676,7 +833,7 @@ export default function Payments() {
             variant="ghost"
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
           >
-            Date
+            Credit Date
             <ArrowUpDown />
           </Button>
         );
@@ -830,6 +987,33 @@ export default function Payments() {
     table.getColumn('currency')?.setFilterValue(selectedCurrencies);
   }, [selectedCurrencies, table]);
 
+  const allocatedInvoices = selectedInvoices.filter(
+    (invoice) => invoice.allocatedAmount > 0
+  );
+  const allocatedInvoiceOptions = customerInvoices.filter((invoice) =>
+    allocatedInvoices.some((alloc) => alloc.invoiceId === invoice.id)
+  );
+
+  useEffect(() => {
+    if (allocatedInvoiceOptions.length === 0) {
+      setBankChargeInvoiceId('');
+      return;
+    }
+    if (
+      !bankChargeInvoiceId ||
+      !allocatedInvoiceOptions.some((invoice) => invoice.id === bankChargeInvoiceId)
+    ) {
+      setBankChargeInvoiceId(allocatedInvoiceOptions[0].id);
+    }
+  }, [allocatedInvoiceOptions, bankChargeInvoiceId]);
+
+  const totalAllocatedAmount = toFixed2(
+    selectedInvoices.reduce((sum, inv) => sum + inv.allocatedAmount, 0)
+  );
+  const remainingAllocation = toFixed2(
+    toFixed2(formData.amount || '0') - totalAllocatedAmount
+  );
+
   return (
     <div className="h-screen flex flex-col py-6 gap-6">
       <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 px-6 md:px-8">
@@ -879,6 +1063,8 @@ export default function Payments() {
               className="min-w-36"
               onClick={() => {
                 setErrorMessage(null);
+                setBankChargeInvoiceId('');
+                setAutoAllocate(true);
                 setFormData({
                   paymentNo: generatePaymentNo(),
                   customerId: '',
@@ -890,7 +1076,7 @@ export default function Payments() {
                   foreignBankCharge: '',
                   currency: 'USD',
                   date: new Date(),
-                  paymentDate: undefined,
+                  paymentDate: new Date(),
                 });
                 dispatch(resetCustomerInvoices());
               }}
@@ -907,8 +1093,7 @@ export default function Payments() {
             <DialogHeader>
               <DialogTitle>Record New Payment</DialogTitle>
               <DialogDescription>
-                Enter payment details. The payment will be automatically
-                allocated to pending invoices.
+                Enter payment details, allocate manually, or use auto allocation.
               </DialogDescription>
             </DialogHeader>
             <form onSubmit={handleSubmit}>
@@ -994,19 +1179,22 @@ export default function Payments() {
                       <Select
                         value={formData.customerId}
                         onValueChange={(value) => {
+                          setErrorMessage(null);
+                          setBankChargeInvoiceId('');
+                          dispatch(resetCustomerInvoices());
                           setFormData({
                             ...formData,
                             customerId: value,
                             amount: '',
                             JPYamount: '',
+                            receivedJPY: '',
+                            localBankCharge: '',
+                            foreignBankCharge: '',
                             exchangeRate: '',
                             currency:
                               customers.find((c) => c.id === value)?.currency ||
                               'USD',
                           });
-                          if (formData.customerId !== value) {
-                            setSelectedInvoices([]);
-                          }
                         }}
                       >
                         <SelectTrigger>
@@ -1026,23 +1214,19 @@ export default function Payments() {
                       <Select
                         value={formData.currency}
                         onValueChange={(value) => {
-                          if (value === 'JPY') {
-                            setFormData({
-                              ...formData,
-                              currency: value,
-                              exchangeRate: '1',
-                              JPYamount: '',
-                              amount: '',
-                            });
-                          } else {
-                            setFormData({
-                              ...formData,
-                              currency: value,
-                              exchangeRate: '',
-                              JPYamount: '',
-                              amount: '',
-                            });
-                          }
+                          setErrorMessage(null);
+                          setBankChargeInvoiceId('');
+                          dispatch(resetCustomerInvoices());
+                          setFormData({
+                            ...formData,
+                            currency: value,
+                            amount: '',
+                            JPYamount: '',
+                            receivedJPY: '',
+                            localBankCharge: '',
+                            foreignBankCharge: '',
+                            exchangeRate: value === 'JPY' ? '1' : '',
+                          });
                         }}
                       >
                         <SelectTrigger>
@@ -1096,26 +1280,28 @@ export default function Payments() {
                           setErrorMessage(null);
                         }
 
+                        let nextFormData = { ...formData, amount: e.target.value };
                         if (formData.currency === 'JPY') {
-                          setFormData({
+                          const jpyAmount = toFixed2(
+                            Math.max(
+                              0,
+                              toFixed2(e.target.value || '0') -
+                                toFixed2(formData.foreignBankCharge || '0')
+                            )
+                          ).toString();
+                          nextFormData = {
                             ...formData,
-                            JPYamount: e.target.value,
+                            JPYamount: jpyAmount,
                             amount: e.target.value,
-                          });
-
-                          allocatePaymentToInvoices(
-                            e.target.value || '0',
-                            e.target.value || '0',
-                            formData.foreignBankCharge,
-                            formData.localBankCharge
-                          );
+                          };
+                        }
+                        if (autoAllocate) {
+                          handleAutoAllocate(nextFormData);
                         } else {
-                          setFormData({ ...formData, amount: e.target.value });
-                          allocatePaymentToInvoices(
-                            e.target.value || '0',
-                            formData.JPYamount,
-                            formData.foreignBankCharge,
-                            formData.localBankCharge
+                          refreshComputedValues(
+                            nextFormData,
+                            selectedInvoices,
+                            bankChargeInvoiceId
                           );
                         }
                       }}
@@ -1137,16 +1323,31 @@ export default function Payments() {
                       disabled={!formData.customerId}
                       value={formData.foreignBankCharge}
                       onChange={(e) => {
-                        setFormData({
+                        const nextForeignBankCharge = e.target.value;
+                        const nextJpyAmount =
+                          formData.currency === 'JPY'
+                            ? toFixed2(
+                                Math.max(
+                                  0,
+                                  toFixed2(formData.amount || '0') -
+                                    toFixed2(nextForeignBankCharge || '0')
+                                )
+                              ).toString()
+                            : formData.JPYamount;
+                        const nextFormData = {
                           ...formData,
-                          foreignBankCharge: e.target.value,
-                        });
-                        allocatePaymentToInvoices(
-                          formData.amount || '0',
-                          formData.JPYamount,
-                          e.target.value,
-                          formData.localBankCharge
-                        );
+                          foreignBankCharge: nextForeignBankCharge,
+                          JPYamount: nextJpyAmount,
+                        };
+                        if (autoAllocate) {
+                          handleAutoAllocate(nextFormData);
+                        } else {
+                          refreshComputedValues(
+                            nextFormData,
+                            selectedInvoices,
+                            bankChargeInvoiceId
+                          );
+                        }
                       }}
                       placeholder="0.00"
                     />
@@ -1159,22 +1360,25 @@ export default function Payments() {
                       id="JPYamount"
                       type="number"
                       disabled={!formData.customerId}
+                      readOnly={formData.currency === 'JPY'}
                       value={formData.JPYamount}
                       placeholder="0"
                       required
                       onChange={(e) => {
-                        const input = e.target.value;
-                        setFormData({
+                        if (formData.currency === 'JPY') return;
+                        const nextFormData = {
                           ...formData,
-                          JPYamount: input,
-                        });
-
-                        allocatePaymentToInvoices(
-                          formData.amount,
-                          input || '0',
-                          formData.foreignBankCharge,
-                          formData.localBankCharge
-                        );
+                          JPYamount: e.target.value,
+                        };
+                        if (autoAllocate) {
+                          handleAutoAllocate(nextFormData);
+                        } else {
+                          refreshComputedValues(
+                            nextFormData,
+                            selectedInvoices,
+                            bankChargeInvoiceId
+                          );
+                        }
                       }}
                     />
                   </div>{' '}
@@ -1187,23 +1391,6 @@ export default function Payments() {
                       readOnly
                       disabled
                       value={formData.exchangeRate}
-                      onChange={(e) => {
-                        const value = parseFloat(e.target.value);
-                        setFormData({
-                          ...formData,
-                          exchangeRate: e.target.value,
-                          JPYamount: Math.floor(
-                            value ? parseFloat(formData.amount) * value : 0
-                          ).toString(),
-                        });
-
-                        allocatePaymentToInvoices(
-                          formData.amount,
-                          e.target.value,
-                          formData.foreignBankCharge,
-                          formData.localBankCharge
-                        );
-                      }}
                       placeholder="0.00"
                       required
                     />
@@ -1219,16 +1406,19 @@ export default function Payments() {
                       value={formData.localBankCharge}
                       disabled={!formData.JPYamount}
                       onChange={(e) => {
-                        setFormData({
+                        const nextFormData = {
                           ...formData,
                           localBankCharge: e.target.value,
-                        });
-                        allocatePaymentToInvoices(
-                          formData.amount || '0',
-                          formData.JPYamount,
-                          formData.foreignBankCharge,
-                          e.target.value
-                        );
+                        };
+                        if (autoAllocate) {
+                          handleAutoAllocate(nextFormData);
+                        } else {
+                          refreshComputedValues(
+                            nextFormData,
+                            selectedInvoices,
+                            bankChargeInvoiceId
+                          );
+                        }
                       }}
                       placeholder="0.00"
                     />
@@ -1247,7 +1437,40 @@ export default function Payments() {
                 </div>
                 {selectedInvoices.length > 0 && (
                   <div className="grid gap-2">
-                    <Label>Allocate Amounts</Label>
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                      <Label>Allocate Amounts</Label>
+                      <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            id="auto-allocate"
+                            checked={autoAllocate}
+                            onCheckedChange={(checked) => {
+                              const value = !!checked;
+                              setAutoAllocate(value);
+                              if (value) {
+                                handleAutoAllocate(formData, true);
+                              }
+                            }}
+                          />
+                          <Label htmlFor="auto-allocate" className="text-sm">
+                            Auto Allocate
+                          </Label>
+                        </div>
+                        <p
+                          className={
+                            remainingAllocation === 0
+                              ? 'text-green-600 text-sm'
+                              : remainingAllocation < 0
+                              ? 'text-red-600 text-sm'
+                              : 'text-orange-500 text-sm'
+                          }
+                        >
+                          {remainingAllocation < 0
+                            ? `Over allocated: ${Math.abs(remainingAllocation)} ${formData.currency}`
+                            : `Remaining: ${remainingAllocation} ${formData.currency}`}
+                        </p>
+                      </div>
+                    </div>
                     {selectedInvoices.map((item, index) => {
                       const invoice = customerInvoices.find(
                         (inv) => inv.id === item.invoiceId
@@ -1258,7 +1481,6 @@ export default function Payments() {
                           className="flex items-center gap-2 my-1"
                         >
                           <span className="flex-1">
-                            {/* Invoice No: */}
                             <span> {invoice?.invoiceNo} </span>:{' '}
                             <span className=" text-muted-foreground">
                               {new Intl.NumberFormat('ja-JP', {
@@ -1267,21 +1489,20 @@ export default function Payments() {
                               }).format(invoice?.balance || 0)}{' '}
                             </span>
                           </span>
-                          {/* <Input
-                            type="number"
-                            step="0.01"
-                            readOnly
-                            value={item.allocatedAmount}
-                            placeholder="0.00"
-                            className="w-32 bg-muted text-center  border border-muted-foreground"
-                          /> */}
-                          <div className="grid gap-2 grid-cols-2">
-                            <p className="bg-muted p-1 rounded-md border border-muted-foreground min-w-24 flex justify-center">
-                              {new Intl.NumberFormat('ja-JP', {
-                                style: 'currency',
-                                currency: invoice?.currency || 'JPY',
-                              }).format(item.allocatedAmount)}{' '}
-                            </p>
+                          <div className="grid gap-2 grid-cols-2 items-center">
+                            <Input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              max={item.balance}
+                              value={item.allocatedAmount}
+                              disabled={autoAllocate}
+                              onChange={(e) =>
+                                handleAllocationChange(item.invoiceId, e.target.value)
+                              }
+                              placeholder="0.00"
+                              className="w-32"
+                            />
 
                             <p className="bg-muted p-1 rounded-md min-w-24 flex justify-center">
                               {new Intl.NumberFormat('ja-JP', {
@@ -1293,6 +1514,32 @@ export default function Payments() {
                         </div>
                       );
                     })}
+                  </div>
+                )}
+                {customerInvoices.length > 0 && (
+                  <div className="grid gap-2">
+                    <Label htmlFor="bankChargeInvoice">
+                      Bank Charge Invoice
+                    </Label>
+                    <Select
+                      value={bankChargeInvoiceId}
+                      disabled={allocatedInvoiceOptions.length === 0 || autoAllocate}
+                      onValueChange={(value) => {
+                        setBankChargeInvoiceId(value);
+                        refreshComputedValues(formData, selectedInvoices, value);
+                      }}
+                    >
+                      <SelectTrigger id="bankChargeInvoice">
+                        <SelectValue placeholder="Allocate an invoice first" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {allocatedInvoiceOptions.map((invoice) => (
+                          <SelectItem key={invoice.id} value={invoice.id}>
+                            {invoice.invoiceNo}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                 )}
               </div>
