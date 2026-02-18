@@ -358,8 +358,8 @@ export default function CustomerDetail() {
       accessorKey: 'localBankCharge',
       header: 'Bank Charge Pending',
       cell: ({ row }) => {
-        const fcb = toFixed2(row.getValue('foreignBankCharge'));
-        const lcb = toFixed2(row.getValue('localBankCharge'));
+        const fcb = toFixed2(row.getValue('foreignBankCharge') || 0);
+        const lcb = toFixed2(row.getValue('localBankCharge') || 0);
 
         const totalBankCharge = fcb + lcb;
 
@@ -566,7 +566,7 @@ export default function CustomerDetail() {
                       currency: 'JPY',
                     }).format(
                       customerInvoices
-                        .map((inv) => inv.localBankCharge)
+                        .map((inv) => inv.localBankCharge || 0)
                         .reduce((a, b) => a + b, 0)
                     )}
                   </p>
