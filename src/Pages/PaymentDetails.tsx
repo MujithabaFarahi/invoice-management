@@ -3,9 +3,13 @@ import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
-import { getPaymentAllocations, getPaymentById } from '@/Config/firestore';
+import {
+  getPaymentAllocations,
+  getPaymentById,
+  toJapanMidnight,
+} from '@/Config/firestore';
 import type { Payment, PaymentAllocation } from '@/Config/types';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, CalendarIcon } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
 import {
   Card,
@@ -13,6 +17,11 @@ import {
   CardDescription,
   CardTitle,
 } from '@/components/ui/card';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Calendar } from '@/components/ui/calendar';
+import { format } from 'date-fns';
+import { db } from '@/Config/firebase';
+import { doc, updateDoc } from 'firebase/firestore';
 
 export default function PaymentDetails() {
   const navigate = useNavigate();
@@ -20,6 +29,9 @@ export default function PaymentDetails() {
   const [allocations, setAllocations] = useState<PaymentAllocation[]>([]);
   const [payment, setPayment] = useState<Payment | null>(null);
   const [loading, setLoading] = useState(true);
+  const [savingDates, setSavingDates] = useState(false);
+  const [editablePaymentDate, setEditablePaymentDate] = useState<Date>(new Date());
+  const [editableCreditDate, setEditableCreditDate] = useState<Date>(new Date());
 
   useEffect(() => {
     if (!paymentId) return;
@@ -29,6 +41,8 @@ export default function PaymentDetails() {
         const data = await getPaymentAllocations(paymentId);
         const payment = await getPaymentById(paymentId);
         setPayment(payment);
+        setEditablePaymentDate(payment.paymentDate || payment.date);
+        setEditableCreditDate(payment.date);
         setAllocations(data);
       } catch (error) {
         console.error('Error fetching allocations:', error);
@@ -53,6 +67,37 @@ export default function PaymentDetails() {
       </div>
     );
 
+  const handleSaveDates = async () => {
+    if (!paymentId || !payment) return;
+
+    try {
+      setSavingDates(true);
+      await updateDoc(doc(db, 'payments', paymentId), {
+        paymentDate: toJapanMidnight(editablePaymentDate),
+        date: toJapanMidnight(editableCreditDate),
+      });
+
+      setPayment({
+        ...payment,
+        paymentDate: editablePaymentDate,
+        date: editableCreditDate,
+      });
+
+      toast.success('Dates updated successfully');
+    } catch (error) {
+      console.error('Error updating payment dates:', error);
+      toast.error('Failed to update dates');
+    } finally {
+      setSavingDates(false);
+    }
+  };
+
+  const isDateChanged =
+    !payment ||
+    (payment.paymentDate || payment.date).getTime() !==
+      editablePaymentDate.getTime() ||
+    payment.date.getTime() !== editableCreditDate.getTime();
+
   return (
     <div className="p-6 md:p-8">
       <Button onClick={() => navigate(-1)} variant="ghost" className="mb-6">
@@ -61,9 +106,19 @@ export default function PaymentDetails() {
 
       <Card>
         <CardContent>
-          <CardTitle className="text-lg font-semibold">
-            Payment Information
-          </CardTitle>
+          <div className="flex items-center justify-between gap-4 mb-2">
+            <CardTitle className="text-lg font-semibold">
+              Payment Information
+            </CardTitle>
+            <Button
+              type="button"
+              onClick={handleSaveDates}
+              isLoading={savingDates}
+              disabled={!isDateChanged}
+            >
+              Save Dates
+            </Button>
+          </div>
           <CardDescription className="mb-4">
             {payment?.paymentNo}
           </CardDescription>
@@ -71,17 +126,59 @@ export default function PaymentDetails() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <p className="text-sm text-muted-foreground">Payment Date</p>
-                <p className="font-medium">
-                  {payment.paymentDate
-                    ? payment.paymentDate.toLocaleDateString('ja-JP')
-                    : '-'}
-                </p>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="w-full justify-start text-left font-normal"
+                    >
+                      <CalendarIcon className="mr-2 h-4 w-4" />
+                      {editablePaymentDate ? (
+                        format(editablePaymentDate, 'PPP')
+                      ) : (
+                        <span>Pick a date</span>
+                      )}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="start" className="w-auto p-0">
+                    <Calendar
+                      mode="single"
+                      selected={editablePaymentDate}
+                      captionLayout="dropdown"
+                      onSelect={(date) => {
+                        if (date) setEditablePaymentDate(date);
+                      }}
+                    />
+                  </PopoverContent>
+                </Popover>
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Credit Date</p>
-                <p className="font-medium">
-                  {payment.date.toLocaleDateString('ja-JP')}
-                </p>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="w-full justify-start text-left font-normal"
+                    >
+                      <CalendarIcon className="mr-2 h-4 w-4" />
+                      {editableCreditDate ? (
+                        format(editableCreditDate, 'PPP')
+                      ) : (
+                        <span>Pick a date</span>
+                      )}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="start" className="w-auto p-0">
+                    <Calendar
+                      mode="single"
+                      selected={editableCreditDate}
+                      captionLayout="dropdown"
+                      onSelect={(date) => {
+                        if (date) setEditableCreditDate(date);
+                      }}
+                    />
+                  </PopoverContent>
+                </Popover>
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Customer</p>
