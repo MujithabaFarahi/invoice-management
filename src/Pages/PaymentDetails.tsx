@@ -293,6 +293,18 @@ export default function PaymentDetails() {
                             }).format(allocation.recievedJPY)}{' '}
                           </p>
                         </div>
+                        <p className="text-xs text-muted-foreground mt-2">
+                          EX Rate: {allocation.exchangeRate || 0} | FBC:{' '}
+                          {new Intl.NumberFormat('ja-JP', {
+                            style: 'currency',
+                            currency: payment?.currency || 'JPY',
+                          }).format(allocation.foreignBankCharge || 0)}{' '}
+                          | LBC:{' '}
+                          {new Intl.NumberFormat('ja-JP', {
+                            style: 'currency',
+                            currency: 'JPY',
+                          }).format(allocation.localBankCharge || 0)}
+                        </p>
                       </div>
                     </div>
                   </div>
