@@ -6,6 +6,8 @@ import {
   Users,
   FileText,
   CreditCard,
+  Package,
+  Settings,
   LogOut,
   X,
 } from 'lucide-react';
@@ -29,7 +31,19 @@ const navigation = [
   { name: 'Dashboard', href: '/', icon: Home },
   { name: 'Customers', href: '/customers', icon: Users },
   { name: 'Invoices', href: '/invoices', icon: FileText },
+  { name: 'Items Catalog', href: '/items-catalog', icon: Package },
   { name: 'Payments', href: '/payments', icon: CreditCard },
+  {
+    name: 'Settings',
+    href: '/settings',
+    icon: Settings,
+    children: [
+      {
+        name: 'Invoice Metadata',
+        href: '/settings/invoice-metadata',
+      },
+    ],
+  },
 ];
 
 export default function Layout() {
@@ -81,21 +95,42 @@ export default function Layout() {
             <nav className="flex-1 px-4 space-y-2">
               {navigation.map((item) => {
                 const Icon = item.icon;
-                const isActive = location.pathname === item.href;
+                const isActive =
+                  location.pathname === item.href ||
+                  (item.children &&
+                    item.children.some((c) => location.pathname === c.href));
                 return (
-                  <Link
-                    key={item.name}
-                    to={item.href}
-                    onClick={() => setSidebarOpen(false)}
-                    className={`flex items-center px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                      isActive
-                        ? 'bg-primary text-primary-foreground'
-                        : 'text-muted-foreground hover:text-foreground hover:bg-muted'
-                    }`}
-                  >
-                    <Icon className="mr-3 h-4 w-4" />
-                    {item.name}
-                  </Link>
+                  <div key={item.name}>
+                    <Link
+                      to={item.href}
+                      onClick={() => setSidebarOpen(false)}
+                      className={`flex items-center px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                        isActive
+                          ? 'bg-primary text-primary-foreground'
+                          : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                      }`}
+                    >
+                      <Icon className="mr-3 h-4 w-4" />
+                      {item.name}
+                    </Link>
+                    {item.children?.map((child) => {
+                      const isChildActive = location.pathname === child.href;
+                      return (
+                        <Link
+                          key={child.name}
+                          to={child.href}
+                          onClick={() => setSidebarOpen(false)}
+                          className={`ml-8 mt-1 block rounded-md px-3 py-2 text-sm transition-colors ${
+                            isChildActive
+                              ? 'bg-primary/90 text-primary-foreground'
+                              : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                          }`}
+                        >
+                          {child.name}
+                        </Link>
+                      );
+                    })}
+                  </div>
                 );
               })}
             </nav>
@@ -144,20 +179,40 @@ export default function Layout() {
             <nav className="flex-1 px-4 space-y-2">
               {navigation.map((item) => {
                 const Icon = item.icon;
-                const isActive = location.pathname === item.href;
+                const isActive =
+                  location.pathname === item.href ||
+                  (item.children &&
+                    item.children.some((c) => location.pathname === c.href));
                 return (
-                  <Link
-                    key={item.name}
-                    to={item.href}
-                    className={`flex items-center px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                      isActive
-                        ? 'bg-primary text-primary-foreground'
-                        : 'text-muted-foreground hover:text-foreground hover:bg-muted'
-                    }`}
-                  >
-                    <Icon className="mr-3 h-4 w-4" />
-                    {item.name}
-                  </Link>
+                  <div key={item.name}>
+                    <Link
+                      to={item.href}
+                      className={`flex items-center px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                        isActive
+                          ? 'bg-primary text-primary-foreground'
+                          : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                      }`}
+                    >
+                      <Icon className="mr-3 h-4 w-4" />
+                      {item.name}
+                    </Link>
+                    {item.children?.map((child) => {
+                      const isChildActive = location.pathname === child.href;
+                      return (
+                        <Link
+                          key={child.name}
+                          to={child.href}
+                          className={`ml-8 mt-1 block rounded-md px-3 py-2 text-sm transition-colors ${
+                            isChildActive
+                              ? 'bg-primary/90 text-primary-foreground'
+                              : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                          }`}
+                        >
+                          {child.name}
+                        </Link>
+                      );
+                    })}
+                  </div>
                 );
               })}
             </nav>

@@ -38,7 +38,6 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Checkbox } from '@/components/ui/checkbox';
 import {
   Select,
   SelectContent,
@@ -201,23 +200,24 @@ export default function Payments() {
 
   const getPaymentMetrics = (
     value: string,
-    jpyAmount: string,
+    exchangeRateInput: string,
     fbc: string,
     lbc: string
   ) => {
     const amount = toFixed2(value || '0');
-    const jpy = toFixed2(jpyAmount || '0');
     const foreignBankCharge = toFixed2(fbc || '0');
     const localBankCharge = toFixed2(lbc || '0');
     const effectiveAmount = toFixed2(amount - foreignBankCharge);
-    const exchangeRate = effectiveAmount > 0 ? jpy / effectiveAmount : 0;
+    const exchangeRate = toFixed2(exchangeRateInput || '0');
+    const jpy = Math.floor(Math.max(0, effectiveAmount * exchangeRate));
     const totalFormJPY = toFixed2(jpy - localBankCharge);
 
     return {
       amount,
+      jpy,
       foreignBankCharge,
       localBankCharge,
-      exchangeRate: toFixed2(exchangeRate),
+      exchangeRate,
       totalFormJPY,
     };
   };
@@ -285,7 +285,7 @@ export default function Payments() {
   ) => {
     const metrics = getPaymentMetrics(
       nextFormData.amount,
-      nextFormData.JPYamount,
+      nextFormData.exchangeRate,
       nextFormData.foreignBankCharge,
       nextFormData.localBankCharge
     );
@@ -298,6 +298,7 @@ export default function Payments() {
     setFormData({
       ...nextFormData,
       exchangeRate: metrics.exchangeRate.toString(),
+      JPYamount: metrics.jpy.toString(),
       receivedJPY: metrics.totalFormJPY.toString(),
     });
     dispatch(setSelectedInvoices(recalculated));
@@ -999,13 +1000,22 @@ export default function Payments() {
       setBankChargeInvoiceId('');
       return;
     }
+    if (!autoAllocate) {
+      if (
+        bankChargeInvoiceId &&
+        !allocatedInvoiceOptions.some((invoice) => invoice.id === bankChargeInvoiceId)
+      ) {
+        setBankChargeInvoiceId('');
+      }
+      return;
+    }
     if (
       !bankChargeInvoiceId ||
       !allocatedInvoiceOptions.some((invoice) => invoice.id === bankChargeInvoiceId)
     ) {
       setBankChargeInvoiceId(allocatedInvoiceOptions[0].id);
     }
-  }, [allocatedInvoiceOptions, bankChargeInvoiceId]);
+  }, [allocatedInvoiceOptions, bankChargeInvoiceId, autoAllocate]);
 
   const totalAllocatedAmount = toFixed2(
     selectedInvoices.reduce((sum, inv) => sum + inv.allocatedAmount, 0)
@@ -1179,6 +1189,8 @@ export default function Payments() {
                       <Select
                         value={formData.customerId}
                         onValueChange={(value) => {
+                          const nextCurrency =
+                            customers.find((c) => c.id === value)?.currency || 'USD';
                           setErrorMessage(null);
                           setBankChargeInvoiceId('');
                           dispatch(resetCustomerInvoices());
@@ -1190,10 +1202,8 @@ export default function Payments() {
                             receivedJPY: '',
                             localBankCharge: '',
                             foreignBankCharge: '',
-                            exchangeRate: '',
-                            currency:
-                              customers.find((c) => c.id === value)?.currency ||
-                              'USD',
+                            exchangeRate: nextCurrency === 'JPY' ? '1' : '',
+                            currency: nextCurrency,
                           });
                         }}
                       >
@@ -1280,21 +1290,10 @@ export default function Payments() {
                           setErrorMessage(null);
                         }
 
-                        let nextFormData = { ...formData, amount: e.target.value };
-                        if (formData.currency === 'JPY') {
-                          const jpyAmount = toFixed2(
-                            Math.max(
-                              0,
-                              toFixed2(e.target.value || '0') -
-                                toFixed2(formData.foreignBankCharge || '0')
-                            )
-                          ).toString();
-                          nextFormData = {
-                            ...formData,
-                            JPYamount: jpyAmount,
-                            amount: e.target.value,
-                          };
-                        }
+                        const nextFormData = {
+                          ...formData,
+                          amount: e.target.value,
+                        };
                         if (autoAllocate) {
                           handleAutoAllocate(nextFormData);
                         } else {
@@ -1323,21 +1322,9 @@ export default function Payments() {
                       disabled={!formData.customerId}
                       value={formData.foreignBankCharge}
                       onChange={(e) => {
-                        const nextForeignBankCharge = e.target.value;
-                        const nextJpyAmount =
-                          formData.currency === 'JPY'
-                            ? toFixed2(
-                                Math.max(
-                                  0,
-                                  toFixed2(formData.amount || '0') -
-                                    toFixed2(nextForeignBankCharge || '0')
-                                )
-                              ).toString()
-                            : formData.JPYamount;
                         const nextFormData = {
                           ...formData,
-                          foreignBankCharge: nextForeignBankCharge,
-                          JPYamount: nextJpyAmount,
+                          foreignBankCharge: e.target.value,
                         };
                         if (autoAllocate) {
                           handleAutoAllocate(nextFormData);
@@ -1360,15 +1347,25 @@ export default function Payments() {
                       id="JPYamount"
                       type="number"
                       disabled={!formData.customerId}
-                      readOnly={formData.currency === 'JPY'}
+                      readOnly
                       value={formData.JPYamount}
                       placeholder="0"
                       required
+                    />
+                  </div>{' '}
+                  <div className="grid gap-2 w-full">
+                    <Label htmlFor="exchangeRate">Exchange Rate</Label>
+                    <Input
+                      id="exchangeRate"
+                      type="number"
+                      step="0.01"
+                      readOnly={formData.currency === 'JPY'}
+                      disabled={!formData.customerId}
+                      value={formData.exchangeRate}
                       onChange={(e) => {
-                        if (formData.currency === 'JPY') return;
                         const nextFormData = {
                           ...formData,
-                          JPYamount: e.target.value,
+                          exchangeRate: e.target.value,
                         };
                         if (autoAllocate) {
                           handleAutoAllocate(nextFormData);
@@ -1380,17 +1377,6 @@ export default function Payments() {
                           );
                         }
                       }}
-                    />
-                  </div>{' '}
-                  <div className="grid gap-2 w-full">
-                    <Label htmlFor="exchangeRate">Exchange Rate</Label>
-                    <Input
-                      id="exchangeRate"
-                      type="number"
-                      step="0.01"
-                      readOnly
-                      disabled
-                      value={formData.exchangeRate}
                       placeholder="0.00"
                       required
                     />
@@ -1441,17 +1427,41 @@ export default function Payments() {
                       <Label>Allocate Amounts</Label>
                       <div className="flex items-center gap-2">
                         <div className="flex items-center gap-2">
-                          <Checkbox
+                          <button
                             id="auto-allocate"
-                            checked={autoAllocate}
-                            onCheckedChange={(checked) => {
-                              const value = !!checked;
+                            type="button"
+                            role="switch"
+                            aria-checked={autoAllocate}
+                            onClick={() => {
+                              const value = !autoAllocate;
                               setAutoAllocate(value);
+                              dispatch(
+                                setSelectedInvoices(
+                                  selectedInvoices.map((item) => ({
+                                    ...item,
+                                    allocatedAmount: 0,
+                                    foreignBankCharge: 0,
+                                    localBankCharge: 0,
+                                    recievedJPY: 0,
+                                  }))
+                                )
+                              );
                               if (value) {
                                 handleAutoAllocate(formData, true);
+                              } else {
+                                setBankChargeInvoiceId('');
                               }
                             }}
-                          />
+                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                              autoAllocate ? 'bg-primary' : 'bg-muted-foreground/30'
+                            }`}
+                          >
+                            <span
+                              className={`inline-block h-5 w-5 transform rounded-full bg-background shadow transition-transform ${
+                                autoAllocate ? 'translate-x-5' : 'translate-x-1'
+                              }`}
+                            />
+                          </button>
                           <Label htmlFor="auto-allocate" className="text-sm">
                             Auto Allocate
                           </Label>

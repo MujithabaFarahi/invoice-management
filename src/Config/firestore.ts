@@ -3,6 +3,7 @@ import {
   addDoc,
   getDocs,
   doc,
+  setDoc,
   updateDoc,
   deleteDoc,
   query,
@@ -17,12 +18,39 @@ import type {
   Currency,
   Customer,
   Invoice,
+  InvoiceItemCatalog,
+  InvoiceMetadataSettings,
   Payment,
   PaymentAllocation,
 } from './types';
 import { db } from './firebase';
 import { getCountFromServer } from 'firebase/firestore';
 import { toFixed2 } from '@/lib/utils';
+
+const stripUndefinedDeep = <T>(value: T): T => {
+  if (value instanceof Date || value instanceof Timestamp) {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => stripUndefinedDeep(item)) as T;
+  }
+
+  if (value && typeof value === 'object') {
+    const cleaned = Object.entries(value as Record<string, unknown>).reduce(
+      (acc, [key, entryValue]) => {
+        if (entryValue !== undefined) {
+          acc[key] = stripUndefinedDeep(entryValue);
+        }
+        return acc;
+      },
+      {} as Record<string, unknown>
+    );
+    return cleaned as T;
+  }
+
+  return value;
+};
 
 // Customer operations
 export const addCustomer = async (customer: Omit<Customer, 'id'>) => {
@@ -58,8 +86,81 @@ export const deleteCustomer = async (id: string) => {
   await deleteDoc(doc(db, 'customers', id));
 };
 
+// Invoice item catalog operations
+export const getInvoiceItemsCatalog = async (
+  includeInactive = false
+): Promise<InvoiceItemCatalog[]> => {
+  const querySnapshot = await getDocs(query(collection(db, 'itemsCatalog')));
+  const items = querySnapshot.docs
+    .map((doc) => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        ...data,
+        createdAt: data.createdAt?.toDate
+          ? data.createdAt.toDate()
+          : new Date(),
+        updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : undefined,
+      } as InvoiceItemCatalog;
+    });
+
+  if (includeInactive) {
+    return items;
+  }
+
+  return items.filter((item) => item.isActive);
+};
+
+export const addInvoiceCatalogItem = async (
+  item: Omit<InvoiceItemCatalog, 'id'>
+) => {
+  const docRef = await addDoc(collection(db, 'itemsCatalog'), item);
+  return docRef.id;
+};
+
+export const updateInvoiceCatalogItem = async (
+  id: string,
+  data: Partial<InvoiceItemCatalog>
+) => {
+  await updateDoc(doc(db, 'itemsCatalog', id), data);
+};
+
+export const deleteInvoiceCatalogItem = async (id: string) => {
+  await deleteDoc(doc(db, 'itemsCatalog', id));
+};
+
+// Settings operations
+const INVOICE_METADATA_DOC_ID = 'invoiceMetadata';
+
+export const getInvoiceMetadataSettings =
+  async (): Promise<InvoiceMetadataSettings | null> => {
+    const settingsRef = doc(db, 'settings', INVOICE_METADATA_DOC_ID);
+    const snap = await getDoc(settingsRef);
+    if (!snap.exists()) {
+      return null;
+    }
+    const data = snap.data();
+    return {
+      id: snap.id,
+      ...data,
+      updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : new Date(),
+    } as InvoiceMetadataSettings;
+  };
+
+export const saveInvoiceMetadataSettings = async (
+  data: Omit<InvoiceMetadataSettings, 'id' | 'updatedAt'>
+) => {
+  const settingsRef = doc(db, 'settings', INVOICE_METADATA_DOC_ID);
+  const payload = stripUndefinedDeep({
+    ...data,
+    updatedAt: new Date(),
+  });
+  await setDoc(settingsRef, payload, { merge: true });
+};
+
 // Invoice operations
 export const addInvoice = async (invoice: Omit<Invoice, 'id'>) => {
+  const sanitizedInvoice = stripUndefinedDeep(invoice);
   const invoiceAmount = invoice.totalAmount;
 
   const currencyQuery = query(
@@ -77,7 +178,7 @@ export const addInvoice = async (invoice: Omit<Invoice, 'id'>) => {
     });
   }
 
-  const docRef = await addDoc(collection(db, 'invoices'), invoice);
+  const docRef = await addDoc(collection(db, 'invoices'), sanitizedInvoice);
 
   return docRef.id;
 };
@@ -136,6 +237,7 @@ export const getCustomerInvoices = async (
     invoicesRef,
     where('customerId', '==', customerId),
     where('currency', '==', currency),
+    where('status', 'in', ['pending', 'partially_paid']),
     where('balance', '>', 0),
     orderBy('date', 'asc'),
     orderBy('createdAt', 'asc')
@@ -143,7 +245,8 @@ export const getCustomerInvoices = async (
 
   const querySnapshot = await getDocs(q);
 
-  return querySnapshot.docs.map((doc) => {
+  return querySnapshot.docs
+    .map((doc) => {
     const data = doc.data();
     return {
       id: doc.id,
@@ -151,10 +254,16 @@ export const getCustomerInvoices = async (
       date: toJapanDate(data.date.toDate()),
       createdAt: data.createdAt.toDate(),
     } as Invoice;
-  });
+    })
+    .sort((a, b) => {
+      const dateDiff = a.date.getTime() - b.date.getTime();
+      if (dateDiff !== 0) return dateDiff;
+      return a.createdAt.getTime() - b.createdAt.getTime();
+    });
 };
 
 export const updateInvoice = async (id: string, data: Partial<Invoice>) => {
+  const sanitizedData = stripUndefinedDeep(data);
   const invoiceRef = doc(db, 'invoices', id);
   const invoiceSnap = await getDoc(invoiceRef);
 
@@ -164,9 +273,9 @@ export const updateInvoice = async (id: string, data: Partial<Invoice>) => {
 
   const oldInvoice = invoiceSnap.data() as Invoice;
   const oldAmount = toFixed2(oldInvoice.totalAmount);
-  const newAmount = data.totalAmount;
+  const newAmount = sanitizedData.totalAmount;
   const oldCurrency = oldInvoice.currency;
-  const newCurrency = data.currency;
+  const newCurrency = sanitizedData.currency;
 
   // 1. Subtract oldAmount from old currency
   const oldCurrencyQuery = query(
@@ -197,7 +306,7 @@ export const updateInvoice = async (id: string, data: Partial<Invoice>) => {
   }
 
   // 3. Update the invoice
-  await updateDoc(invoiceRef, data);
+  await updateDoc(invoiceRef, sanitizedData);
 };
 
 export const deleteInvoice = async (id: string) => {

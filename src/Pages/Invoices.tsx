@@ -9,7 +9,10 @@ import {
   FilterX,
   Trash2,
   Edit,
+  Download,
   CalendarIcon,
+  MinusCircle,
+  Save,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { format } from 'date-fns';
@@ -50,12 +53,23 @@ import {
 import { Badge } from '@/components/ui/badge';
 import {
   addInvoice,
+  addInvoiceCatalogItem,
   updateInvoice,
   deleteInvoice,
+  getInvoiceItemsCatalog,
+  getInvoiceById,
+  getInvoiceMetadataSettings,
   toJapanMidnight,
   toJapanDate,
 } from '@/Config/firestore';
-import { type Invoice } from '@/Config/types';
+import {
+  type Invoice,
+  type InvoiceMetadataSettings,
+  type BankAccountDetails,
+  type InvoiceItem,
+  type InvoiceItemGroup,
+  type InvoiceItemCatalog,
+} from '@/Config/types';
 import { toast } from 'sonner';
 import {
   type ColumnDef,
@@ -97,10 +111,163 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
+import { Checkbox } from '@/components/ui/checkbox';
 import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
 import { db } from '@/Config/firebase';
 import { useNavigate } from 'react-router-dom';
 import { cn, getPaginationRange, toFixed2 } from '@/lib/utils';
+import { downloadInvoicePdf } from '@/lib/invoicePdf';
+
+type MarkupMode = 'percent' | 'fixed';
+
+type InvoiceItemFormRow = {
+  lineNo: string;
+  groupId: string;
+  itemsCatalogId: string | null;
+  itemName: string;
+  description: string;
+  partNo: string;
+  itemCode: string;
+  cost: string;
+  quantity: string;
+  markupMode?: MarkupMode;
+  markupValue?: string;
+};
+
+type InvoiceItemGroupForm = {
+  id: string;
+  name: string;
+  isShow: boolean;
+};
+
+const createGroupId = () => `grp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+const createDefaultGroup = (name = 'General'): InvoiceItemGroupForm => ({
+  id: createGroupId(),
+  name,
+  isShow: true,
+});
+
+const createEmptyItemRow = (
+  groupId: string,
+  lineNo = '1'
+): InvoiceItemFormRow => ({
+  lineNo,
+  groupId,
+  itemsCatalogId: null,
+  itemName: '',
+  description: '',
+  partNo: '',
+  itemCode: '',
+  cost: '',
+  quantity: '1',
+});
+
+const toLineNo = (value: string | number | undefined, fallback: number) => {
+  const parsed = Number(value);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return Math.floor(parsed);
+  }
+  return fallback;
+};
+
+const getUnitPriceJPY = (cost: number, markupMode: MarkupMode, markupValue: number) => {
+  if (markupMode === 'fixed') {
+    return toFixed2(cost + markupValue);
+  }
+  return toFixed2(cost * (1 + markupValue / 100));
+};
+
+const getUnitPrice = (unitPriceJPY: number, exchangeRate: number) => {
+  return toFixed2(unitPriceJPY * exchangeRate);
+};
+
+const getMarkupInput = (value?: string) =>
+  value && value.trim() !== '' ? value : undefined;
+const toFixed4 = (value: number | string): number =>
+  +parseFloat(String(value)).toFixed(4);
+
+const normalizeCatalogField = (value?: string) => (value || '').trim().toLowerCase();
+
+const deriveBankAccounts = (
+  metadata: InvoiceMetadataSettings | null
+): BankAccountDetails[] => {
+  if (!metadata) return [];
+  if (metadata.bankAccounts && metadata.bankAccounts.length > 0) {
+    return metadata.bankAccounts;
+  }
+
+  const hasLegacy = [
+    metadata.bankName,
+    metadata.branch,
+    metadata.swiftCode,
+    metadata.bankAddress,
+    metadata.accountName,
+    metadata.accountType,
+    metadata.accountNumber,
+  ].some((value) => (value || '').trim() !== '');
+
+  if (!hasLegacy) return [];
+
+  return [
+    {
+      id: 'legacy-primary',
+      label: 'Primary',
+      bankName: metadata.bankName || '',
+      branch: metadata.branch || '',
+      swiftCode: metadata.swiftCode || '',
+      bankAddress: metadata.bankAddress || '',
+      accountName: metadata.accountName || '',
+      accountType: metadata.accountType || '',
+      accountNumber: metadata.accountNumber || '',
+    },
+  ];
+};
+
+const isDuplicateCatalogItem = (
+  existing: {
+    itemName?: string;
+    partNo?: string;
+    itemCode?: string;
+  },
+  incoming: {
+    itemName?: string;
+    partNo?: string;
+    itemCode?: string;
+  }
+) => {
+  const existingName = normalizeCatalogField(existing.itemName);
+  const incomingName = normalizeCatalogField(incoming.itemName);
+  if (!existingName || existingName !== incomingName) {
+    return false;
+  }
+
+  const existingPart = normalizeCatalogField(existing.partNo);
+  const incomingPart = normalizeCatalogField(incoming.partNo);
+  const existingCode = normalizeCatalogField(existing.itemCode);
+  const incomingCode = normalizeCatalogField(incoming.itemCode);
+
+  // Duplicate only when same name + same partNo + same itemCode.
+  // Empty values are part of the exact-match combination.
+  return existingPart === incomingPart && existingCode === incomingCode;
+};
+
+function FieldTooltip({
+  value,
+  children,
+}: {
+  value: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="relative group">
+      {children}
+      <div className="pointer-events-none absolute left-1/2 top-0 z-50 -translate-x-1/2 -translate-y-[110%] whitespace-nowrap rounded bg-black px-2 py-1 text-xs text-white opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
+        {value || '(empty)'}
+      </div>
+    </div>
+  );
+}
 
 export default function Invoices() {
   const navigate = useNavigate();
@@ -159,16 +326,181 @@ export default function Invoices() {
   const [selectedCustomers, setSelectedCustomers] = useState<string[]>([]);
   const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
   const [selectedCurrencies, setSelectedCurrencies] = useState<string[]>([]);
-  const statusOptions = ['paid', 'partially_paid', 'pending'];
+  const statusOptions = ['draft', 'paid', 'partially_paid', 'pending'];
+  const [catalogItems, setCatalogItems] = useState<InvoiceItemCatalog[]>([]);
 
   const [formData, setFormData] = useState({
     invoiceNo: '',
     customerId: '',
-    totalAmount: '',
     currency: 'USD',
     invoiceLink: '',
     date: new Date(),
+    exchangeRate: '1',
+    markupMode: 'percent' as MarkupMode,
+    markupValue: '30',
+    itemsPerPage: '20',
+    bankAccountId: '',
+    remarks: '',
   });
+  const [itemGroups, setItemGroups] = useState<InvoiceItemGroupForm[]>([
+    createDefaultGroup(),
+  ]);
+  const [itemRows, setItemRows] = useState<InvoiceItemFormRow[]>([]);
+  const [catalogSearch, setCatalogSearch] = useState('');
+  const [catalogPickerOpen, setCatalogPickerOpen] = useState(false);
+  const [isRateLoading, setIsRateLoading] = useState(false);
+  const [submitStatus, setSubmitStatus] = useState<'draft' | 'pending'>(
+    'pending'
+  );
+  const [invoiceMetadata, setInvoiceMetadata] =
+    useState<InvoiceMetadataSettings | null>(null);
+
+  const loadCatalogItems = async () => {
+    try {
+      const items = await getInvoiceItemsCatalog(true);
+      setCatalogItems(items);
+    } catch (error) {
+      console.error('Error fetching item catalog:', error);
+    }
+  };
+
+  useEffect(() => {
+    loadCatalogItems();
+  }, []);
+
+  useEffect(() => {
+    const loadMetadata = async () => {
+      try {
+        const metadata = await getInvoiceMetadataSettings();
+        setInvoiceMetadata(metadata);
+      } catch (error) {
+        console.error('Error fetching invoice metadata:', error);
+      }
+    };
+    loadMetadata();
+  }, []);
+
+  const fetchExchangeRate = async (currencyCode: string) => {
+    if (!currencyCode) return;
+    if (currencyCode === 'JPY') {
+      setFormData((prev) => ({ ...prev, exchangeRate: '1' }));
+      return;
+    }
+
+    try {
+      setIsRateLoading(true);
+      const response = await fetch(
+        `https://api.frankfurter.app/latest?from=JPY&to=${currencyCode}`
+      );
+      if (!response.ok) {
+        throw new Error(`Exchange API failed: ${response.status}`);
+      }
+
+      const data = (await response.json()) as {
+        rates?: Record<string, number>;
+      };
+      const rate = data.rates?.[currencyCode];
+      if (!rate) {
+        throw new Error('Rate not available');
+      }
+
+      setFormData((prev) => ({
+        ...prev,
+        exchangeRate: String(toFixed4(rate)),
+      }));
+    } catch (error) {
+      console.error('Error fetching exchange rate:', error);
+      toast.error('Error', {
+        description: `Unable to fetch ${currencyCode} rate from API`,
+      });
+    } finally {
+      setIsRateLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isDialogOpen) return;
+    if (!formData.currency) return;
+    fetchExchangeRate(formData.currency);
+  }, [formData.currency, isDialogOpen]);
+
+  const activeCatalogItems = catalogItems.filter((item) => item.isActive);
+  const filteredCatalogItems = activeCatalogItems.filter((item) =>
+    item.itemName.toLowerCase().includes(catalogSearch.trim().toLowerCase())
+  );
+
+  const exchangeRate = Math.max(0, toFixed4(formData.exchangeRate || 0));
+  const invoiceMarkupValue = Math.max(0, toFixed2(formData.markupValue || 0));
+  const bankAccounts = deriveBankAccounts(invoiceMetadata);
+  const defaultBankAccountId = bankAccounts[0]?.id || '';
+  const selectedCustomerAddress =
+    customers.find((c) => c.id === formData.customerId)?.address?.trim() || '';
+
+  useEffect(() => {
+    if (!isDialogOpen) return;
+    if (!defaultBankAccountId) return;
+    setFormData((prev) =>
+      prev.bankAccountId ? prev : { ...prev, bankAccountId: defaultBankAccountId }
+    );
+  }, [defaultBankAccountId, isDialogOpen]);
+  const validGroupIds = new Set(itemGroups.map((group) => group.id));
+  const fallbackGroupId = itemGroups[0]?.id || '';
+
+  const sortedItemRows = [...itemRows].sort(
+    (a, b) => toLineNo(a.lineNo, Number.MAX_SAFE_INTEGER) - toLineNo(b.lineNo, Number.MAX_SAFE_INTEGER)
+  );
+
+  const computedItemsWithGroup = sortedItemRows
+    .filter((row) => row.itemName.trim().length > 0)
+    .map((row, index) => {
+      const cost = Math.max(0, toFixed2(row.cost || 0));
+      const quantity = Math.max(0, toFixed2(row.quantity || 0));
+      const markupMode = row.markupMode ?? formData.markupMode;
+      const rowMarkupInput = getMarkupInput(row.markupValue);
+      const markupValue = Math.max(
+        0,
+        toFixed2((rowMarkupInput ?? formData.markupValue) || 0)
+      );
+      const unitPriceJPY = getUnitPriceJPY(cost, markupMode, markupValue);
+      const unitPrice = getUnitPrice(unitPriceJPY, exchangeRate);
+
+      const item: InvoiceItem = {
+        lineNo: toLineNo(row.lineNo, index + 1),
+        itemsCatalogId: row.itemsCatalogId,
+        itemName: row.itemName.trim(),
+        description: row.description.trim(),
+        partNo: row.partNo.trim(),
+        itemCode: row.itemCode.trim(),
+        cost,
+        unitPriceJPY,
+        markupMode: row.markupMode,
+        markupValue: rowMarkupInput ? markupValue : undefined,
+        unitPrice,
+        quantity,
+        totalPrice: toFixed2(unitPrice * quantity),
+      };
+
+      return {
+        groupId: validGroupIds.has(row.groupId) ? row.groupId : fallbackGroupId,
+        item,
+      };
+    });
+
+  const computedItemGroups: InvoiceItemGroup[] = itemGroups
+    .map((group) => ({
+      id: group.id,
+      name: group.name.trim() || 'Unnamed Group',
+      isShow: group.isShow,
+      items: computedItemsWithGroup
+        .filter((entry) => entry.groupId === group.id)
+        .map((entry) => entry.item),
+    }));
+
+  const calculatedTotalAmount = toFixed2(
+    computedItemGroups
+      .flatMap((group) => group.items)
+      .reduce((sum, item) => sum + item.totalPrice, 0)
+  );
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -180,9 +512,39 @@ export default function Invoices() {
       return;
     }
 
-    if (!formData.invoiceNo || !formData.customerId || !formData.totalAmount) {
+    if (!formData.invoiceNo || !formData.customerId) {
       toast.error('Error', {
         description: 'Please fill in all required fields',
+      });
+      return;
+    }
+    const selectedBankAccount = bankAccounts.find(
+      (account) => account.id === formData.bankAccountId
+    );
+    if (bankAccounts.length > 0 && !selectedBankAccount) {
+      toast.error('Error', {
+        description: 'Please select a bank account',
+      });
+      return;
+    }
+    const hasMissingCost = itemRows.some(
+      (row) => row.itemName.trim() && row.cost.trim() === ''
+    );
+    if (hasMissingCost) {
+      toast.error('Error', {
+        description: 'Cost is required for all invoice items with name',
+      });
+      return;
+    }
+    if (computedItemGroups.flatMap((group) => group.items).length === 0) {
+      toast.error('Error', {
+        description: 'Add at least one invoice item',
+      });
+      return;
+    }
+    if (computedItemGroups.length === 0) {
+      toast.error('Error', {
+        description: 'Assign invoice items to at least one group',
       });
       return;
     }
@@ -195,10 +557,16 @@ export default function Invoices() {
       return;
     }
 
-    const totalAmount = toFixed2(formData.totalAmount);
+    const totalAmount = calculatedTotalAmount;
+    const itemsPerPage = Math.max(
+      1,
+      Math.floor(Number(formData.itemsPerPage || 20) || 20)
+    );
 
     try {
       setIsLoading(true);
+      const finalStatus: Invoice['status'] = submitStatus;
+
       const invoiceData = {
         invoiceNo: formData.invoiceNo,
         customerId: formData.customerId,
@@ -209,10 +577,20 @@ export default function Invoices() {
         currency: formData.currency,
         balance: totalAmount,
         recievedJPY: 0,
-        status: 'pending' as const,
+        status: finalStatus,
         date: toJapanMidnight(formData.date),
         foreignBankCharge: 0,
         localBankCharge: 0,
+        exchangeRate,
+        markupMode: formData.markupMode,
+        markupValue: invoiceMarkupValue,
+        itemsPerPage,
+        remarks: formData.remarks.trim(),
+        bankAccountId: selectedBankAccount?.id,
+        bankAccount: selectedBankAccount,
+        itemGroups: computedItemGroups,
+        templateVersion: 'v1',
+        documentSource: 'system' as const,
       };
 
       if (editingInvoice) {
@@ -251,11 +629,19 @@ export default function Invoices() {
       setFormData({
         invoiceNo: '',
         customerId: '',
-        totalAmount: '',
         currency: 'USD',
         date: new Date(),
         invoiceLink: '',
+        exchangeRate: '1',
+        markupMode: 'percent',
+        markupValue: '30',
+        itemsPerPage: '20',
+        bankAccountId: defaultBankAccountId,
+        remarks: '',
       });
+      setItemGroups([createDefaultGroup()]);
+      setItemRows([]);
+      setSubmitStatus('pending');
     } catch (error) {
       console.error('Error saving invoice:', error);
       toast.error('Error', {
@@ -267,16 +653,211 @@ export default function Invoices() {
   };
 
   const handleEdit = (invoice: Invoice) => {
+    const groupsFromInvoice: InvoiceItemGroupForm[] =
+      invoice.itemGroups && invoice.itemGroups.length > 0
+        ? invoice.itemGroups.map((group) => ({
+            id: group.id || createGroupId(),
+            name: group.name || 'Unnamed Group',
+            isShow: group.isShow ?? true,
+          }))
+        : [createDefaultGroup()];
+
     setEditingInvoice(invoice);
     setFormData({
       invoiceNo: invoice.invoiceNo,
       customerId: invoice.customerId,
-      totalAmount: invoice.totalAmount.toString(),
       currency: invoice.currency,
       date: new Date(invoice.date),
       invoiceLink: invoice.invoiceLink ?? '',
+      exchangeRate: String(invoice.exchangeRate ?? 1),
+      markupMode: invoice.markupMode ?? 'percent',
+      markupValue: String(invoice.markupValue ?? 0),
+      itemsPerPage: String(invoice.itemsPerPage ?? 20),
+      bankAccountId:
+        invoice.bankAccountId || invoice.bankAccount?.id || defaultBankAccountId,
+      remarks: invoice.remarks ?? '',
     });
+    setSubmitStatus(invoice.status === 'draft' ? 'draft' : 'pending');
+    setItemGroups(groupsFromInvoice);
+
+    if (invoice.itemGroups && invoice.itemGroups.length > 0) {
+      const groupedRows = invoice.itemGroups.flatMap((group) =>
+        (group.items || []).map((item) => ({
+          lineNo: String(item.lineNo ?? 1),
+          groupId: group.id,
+          itemsCatalogId: item.itemsCatalogId ?? null,
+          itemName: item.itemName,
+          description: item.description ?? '',
+          partNo: item.partNo ?? '',
+          itemCode: item.itemCode ?? '',
+          cost: String(item.cost ?? item.unitPriceJPY ?? 0),
+          quantity: String(item.quantity ?? 1),
+          markupMode: item.markupMode,
+          markupValue:
+            item.markupValue !== undefined ? String(item.markupValue) : '',
+        }))
+      );
+
+      setItemRows(groupedRows);
+    } else {
+      setItemRows([
+        {
+          ...createEmptyItemRow(groupsFromInvoice[0].id, '1'),
+          itemName: 'Legacy item',
+          cost: String(invoice.totalAmount),
+          quantity: '1',
+        },
+      ]);
+    }
     setIsDialogOpen(true);
+  };
+
+  const updateItemRow = (
+    index: number,
+    patch: Partial<InvoiceItemFormRow>
+  ) => {
+    setItemRows((prev) =>
+      prev.map((row, i) => (i === index ? { ...row, ...patch } : row))
+    );
+  };
+
+  const updateGroup = (groupId: string, patch: Partial<InvoiceItemGroupForm>) => {
+    setItemGroups((prev) =>
+      prev.map((group) => (group.id === groupId ? { ...group, ...patch } : group))
+    );
+  };
+
+  const addItemGroup = () => {
+    setItemGroups((prev) => [...prev, createDefaultGroup(`Group ${prev.length + 1}`)]);
+  };
+
+  const removeItemGroup = (groupId: string) => {
+    if (itemGroups.length <= 1) {
+      toast.error('Error', {
+        description: 'At least one group is required',
+      });
+      return;
+    }
+
+    const fallbackGroup = itemGroups.find((group) => group.id !== groupId);
+    if (!fallbackGroup) return;
+
+    setItemRows((prev) =>
+      prev.map((row) =>
+        row.groupId === groupId ? { ...row, groupId: fallbackGroup.id } : row
+      )
+    );
+    setItemGroups((prev) => prev.filter((group) => group.id !== groupId));
+  };
+
+  const addCustomItemRow = () => {
+    const defaultGroup = itemGroups[0] ?? createDefaultGroup();
+    if (itemGroups.length === 0) {
+      setItemGroups([defaultGroup]);
+    }
+    setItemRows((prev) => {
+      const nextNo =
+        prev.reduce(
+          (max, row) => Math.max(max, toLineNo(row.lineNo, 0)),
+          0
+        ) + 1;
+      return [...prev, createEmptyItemRow(defaultGroup.id, String(nextNo))];
+    });
+  };
+
+  const addCatalogItemRow = (catalogId: string) => {
+    const catalogItem = catalogItems.find((item) => item.id === catalogId);
+    if (!catalogItem) return;
+    const defaultGroup = itemGroups[0] ?? createDefaultGroup();
+    if (itemGroups.length === 0) {
+      setItemGroups([defaultGroup]);
+    }
+
+    setItemRows((prev) => [
+      ...prev,
+      {
+        lineNo: String(
+          prev.reduce((max, row) => Math.max(max, toLineNo(row.lineNo, 0)), 0) + 1
+        ),
+        groupId: defaultGroup.id,
+        itemsCatalogId: catalogItem.id,
+        itemName: catalogItem.itemName,
+        description: catalogItem.description ?? '',
+        partNo: catalogItem.partNo ?? '',
+        itemCode: catalogItem.itemCode ?? '',
+        cost: String(catalogItem.defaultUnitPriceJPY ?? 0),
+        quantity: '1',
+      },
+    ]);
+  };
+
+  const removeItemRow = (index: number) => {
+    setItemRows((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const saveRowToCatalog = async (row: InvoiceItemFormRow, index: number) => {
+    if (row.itemsCatalogId) {
+      toast.error('Error', {
+        description: 'This row is already linked to catalog',
+      });
+      return;
+    }
+
+    if (!row.itemName.trim()) {
+      toast.error('Error', {
+        description: 'Item name is required before saving to catalog',
+      });
+      return;
+    }
+
+    const isDuplicate = catalogItems.some(
+      (item) => isDuplicateCatalogItem(item, row)
+    );
+    if (isDuplicate) {
+      toast.error('Error', {
+        description: 'Duplicate catalog item exists with same name/part/code',
+      });
+      return;
+    }
+
+    if (row.cost.trim() === '') {
+      toast.error('Error', {
+        description: 'Cost is required before saving to catalog',
+      });
+      return;
+    }
+
+    const defaultUnitPriceJPY = Number(row.cost);
+    if (Number.isNaN(defaultUnitPriceJPY) || defaultUnitPriceJPY < 0) {
+      toast.error('Error', {
+        description: 'Invalid unit price for catalog save',
+      });
+      return;
+    }
+
+    try {
+      const id = await addInvoiceCatalogItem({
+        itemName: row.itemName.trim(),
+        description: row.description.trim(),
+        partNo: row.partNo.trim(),
+        itemCode: row.itemCode.trim(),
+        defaultUnitPriceJPY,
+        isActive: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      updateItemRow(index, { itemsCatalogId: id });
+      await loadCatalogItems();
+      toast.success('Success', {
+        description: 'Custom item saved to catalog',
+      });
+    } catch (error) {
+      console.error('Error saving row to catalog:', error);
+      toast.error('Error', {
+        description: 'Failed to save custom item to catalog',
+      });
+    }
   };
 
   const handleDelete = async (id: string) => {
@@ -297,8 +878,30 @@ export default function Invoices() {
     }
   };
 
+  const handleDownloadPdf = async (invoice: Invoice) => {
+    if (invoice.status === 'draft') {
+      return;
+    }
+    try {
+      const [fullInvoice, metadata] = await Promise.all([
+        getInvoiceById(invoice.id),
+        getInvoiceMetadataSettings(),
+      ]);
+      const customerAddress =
+        customers.find((customer) => customer.id === fullInvoice.customerId)?.address || '';
+      await downloadInvoicePdf(fullInvoice, metadata, { customerAddress });
+    } catch (error) {
+      console.error('Error generating invoice PDF:', error);
+      toast.error('Error', {
+        description: 'Failed to generate invoice PDF',
+      });
+    }
+  };
+
   const getStatusBadge = (status: string) => {
     switch (status) {
+      case 'draft':
+        return <Badge className="bg-zinc-600 text-zinc-100">Draft</Badge>;
       case 'paid':
         return <Badge className="bg-green-800 text-green-100">Paid</Badge>;
       case 'partially_paid':
@@ -475,6 +1078,16 @@ export default function Invoices() {
                 Copy Invoice No
               </DropdownMenuItem>
               <DropdownMenuSeparator />
+              <DropdownMenuItem
+                disabled={invoice.status === 'draft'}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDownloadPdf(invoice);
+                }}
+              >
+                <Download className="text-primary" />
+                Generate PDF
+              </DropdownMenuItem>
 
               <DropdownMenuItem
                 onClick={(e) => {
@@ -616,12 +1229,20 @@ export default function Invoices() {
                 setFormData({
                   invoiceNo: '',
                   customerId: '',
-                  totalAmount: '',
                   invoiceLink: '',
                   currency: 'USD',
                   date: new Date(),
+                  exchangeRate: '1',
+                  markupMode: 'percent',
+                  markupValue: '30',
+                  itemsPerPage: '20',
+                  bankAccountId: defaultBankAccountId,
+                  remarks: '',
                 });
+                setItemGroups([createDefaultGroup()]);
+                setItemRows([]);
                 setErrorMessage(null);
+                setSubmitStatus('pending');
               }}
             >
               <Plus className="mr-2 h-4 w-4" />
@@ -630,6 +1251,7 @@ export default function Invoices() {
           </DialogTrigger>
 
           <DialogContent
+            className="w-[calc(100vw-2rem)] max-w-[calc(100vw-2rem)] max-h-[92vh] overflow-y-auto xl:max-w-[1400px]"
             onPointerDownOutside={(e) => e.preventDefault()}
             // onEscapeKeyDown={(e) => e.preventDefault()}
           >
@@ -645,61 +1267,76 @@ export default function Invoices() {
             </DialogHeader>
             <form onSubmit={handleSubmit}>
               <div className="grid gap-4 py-4">
-                <div className="grid gap-2">
-                  <Label htmlFor="invoiceNo">Invoice Number *</Label>
-                  <Input
-                    id="invoiceNo"
-                    value={formData.invoiceNo}
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      setFormData({ ...formData, invoiceNo: value });
-
-                      const exists = invoices.some(
-                        (inv) => inv.invoiceNo === value.trim()
-                      );
-                      setErrorMessage(
-                        exists ? 'Invoice number already exists' : ''
-                      );
-                    }}
-                    placeholder="INV-001"
-                    required
-                  />
-                  {errorMessage && (
-                    <p className="text-sm text-red-500">{errorMessage}</p>
-                  )}
-                </div>
-                <div className="grid gap-2">
-                  <Label>Date</Label>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant={'outline'}
-                        className="w-full justify-start text-left font-normal"
-                      >
-                        <CalendarIcon className="mr-2 h-4 w-4" />
-                        {formData.date ? (
-                          format(formData.date, 'PPP')
-                        ) : (
-                          <span>Pick a date</span>
-                        )}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent align="start" className="w-auto p-0">
-                      <Calendar
-                        mode="single"
-                        selected={formData.date}
-                        captionLayout="dropdown"
-                        onSelect={(date) => {
-                          if (date) {
-                            setFormData({ ...formData, date });
-                          }
-                        }}
-                      />
-                    </PopoverContent>
-                  </Popover>
-                </div>
-                <div className="flex gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div className="grid gap-2">
+                    <Label htmlFor="invoiceNo">Invoice Number *</Label>
+                    <Input
+                      id="invoiceNo"
+                      value={formData.invoiceNo}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setFormData({ ...formData, invoiceNo: value });
+
+                        const exists = invoices.some(
+                          (inv) =>
+                            inv.invoiceNo === value.trim() &&
+                            inv.id !== editingInvoice?.id
+                        );
+                        setErrorMessage(
+                          exists ? 'Invoice number already exists' : ''
+                        );
+                      }}
+                      placeholder="INV-001"
+                      required
+                    />
+                    {errorMessage && (
+                      <p className="text-sm text-red-500">{errorMessage}</p>
+                    )}
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>Date</Label>
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant={'outline'}
+                          className="w-full justify-start text-left font-normal"
+                        >
+                          <CalendarIcon className="mr-2 h-4 w-4" />
+                          {formData.date ? (
+                            format(formData.date, 'PPP')
+                          ) : (
+                            <span>Pick a date</span>
+                          )}
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent align="start" className="w-auto p-0">
+                        <Calendar
+                          mode="single"
+                          selected={formData.date}
+                          captionLayout="dropdown"
+                          onSelect={(date) => {
+                            if (date) {
+                              setFormData({ ...formData, date });
+                            }
+                          }}
+                        />
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="invoiceLink">Invoice Link</Label>
+                    <Input
+                      id="invoiceLink"
+                      value={formData.invoiceLink}
+                      onChange={(e) =>
+                        setFormData({ ...formData, invoiceLink: e.target.value })
+                      }
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
+                  <div className="grid gap-2 md:col-span-2">
                     <Label htmlFor="customer">Customer *</Label>
                     <Select
                       value={formData.customerId}
@@ -724,6 +1361,11 @@ export default function Invoices() {
                         ))}
                       </SelectContent>
                     </Select>
+                    {selectedCustomerAddress && (
+                      <p className="text-xs text-muted-foreground">
+                        Address: {selectedCustomerAddress}
+                      </p>
+                    )}
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="currency">Currency</Label>
@@ -745,30 +1387,510 @@ export default function Invoices() {
                       </SelectContent>
                     </Select>
                   </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="exchangeRate">Exchange Rate</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="exchangeRate"
+                        type="number"
+                        step="0.0001"
+                        min={0}
+                        value={formData.exchangeRate}
+                        onChange={(e) =>
+                          setFormData({ ...formData, exchangeRate: e.target.value })
+                        }
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="min-w-20"
+                        isLoading={isRateLoading}
+                        onClick={() => fetchExchangeRate(formData.currency)}
+                      >
+                        Refresh
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Auto-fetched from API for selected currency (base: JPY)
+                    </p>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="markupMode">Invoice Markup</Label>
+                    <div className="grid gap-2">
+                      <Select
+                        value={formData.markupMode}
+                        onValueChange={(value) =>
+                          setFormData({
+                            ...formData,
+                            markupMode: value as MarkupMode,
+                          })
+                        }
+                      >
+                        <SelectTrigger className="w-28">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="percent">%</SelectItem>
+                          <SelectItem value="fixed">Fixed</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Input
+                        id="markupValue"
+                        type="number"
+                        step="0.01"
+                        min={0}
+                        value={formData.markupValue}
+                        onChange={(e) =>
+                          setFormData({
+                            ...formData,
+                            markupValue: e.target.value,
+                          })
+                        }
+                      />
+                    </div>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="itemsPerPage">Items Per Page</Label>
+                    <Input
+                      id="itemsPerPage"
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={formData.itemsPerPage}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          itemsPerPage: e.target.value,
+                        })
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Used when generating PDF pagination
+                    </p>
+                  </div>
                 </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="totalAmount">Total Amount *</Label>
-                  <Input
-                    id="totalAmount"
-                    type="number"
-                    step="0.01"
-                    value={formData.totalAmount}
-                    onChange={(e) =>
-                      setFormData({ ...formData, totalAmount: e.target.value })
-                    }
-                    placeholder="0.00"
-                    required
-                  />
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="bankAccount">Bank Account</Label>
+                    <Select
+                      value={formData.bankAccountId}
+                      onValueChange={(value) =>
+                        setFormData({ ...formData, bankAccountId: value })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue
+                          placeholder={
+                            bankAccounts.length > 0
+                              ? 'Select account'
+                              : 'No bank account configured'
+                          }
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {bankAccounts.map((account) => (
+                          <SelectItem key={account.id} value={account.id}>
+                            {account.label?.trim() ||
+                              account.bankName?.trim() ||
+                              account.accountNumber?.trim() ||
+                              'Bank Account'}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-2 md:col-span-2">
+                    <Label htmlFor="remarks">Remarks</Label>
+                    <Input
+                      id="remarks"
+                      value={formData.remarks}
+                      onChange={(e) =>
+                        setFormData({ ...formData, remarks: e.target.value })
+                      }
+                      placeholder="Payment terms or notes"
+                    />
+                  </div>
                 </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="invoiceLink">Invoice Link</Label>
-                  <Input
-                    id="invoiceLink"
-                    value={formData.invoiceLink}
-                    onChange={(e) =>
-                      setFormData({ ...formData, invoiceLink: e.target.value })
-                    }
-                  />
+
+                <div className="border rounded-md p-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="font-medium">Item Groups</p>
+                    <Button type="button" variant="outline" onClick={addItemGroup}>
+                      <Plus className="h-4 w-4 mr-1" />
+                      Add Group
+                    </Button>
+                  </div>
+                  <div className="grid gap-2">
+                    {itemGroups.map((group) => (
+                      <div
+                        key={group.id}
+                        className="grid grid-cols-1 md:grid-cols-[1fr_auto_auto] gap-2 items-center"
+                      >
+                        <Input
+                          value={group.name}
+                          onChange={(e) =>
+                            updateGroup(group.id, { name: e.target.value })
+                          }
+                          placeholder="Group name"
+                        />
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            id={`group-show-${group.id}`}
+                            checked={group.isShow}
+                            onCheckedChange={(checked) =>
+                              updateGroup(group.id, { isShow: checked === true })
+                            }
+                          />
+                          <Label
+                            htmlFor={`group-show-${group.id}`}
+                            className="text-sm"
+                          >
+                            Show in PDF
+                          </Label>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          onClick={() => removeItemGroup(group.id)}
+                        >
+                          <Trash2 className="h-4 w-4 text-red-600" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="border rounded-md">
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 p-3 border-b">
+                    <p className="font-medium">Invoice Items</p>
+                    <div className="flex flex-wrap gap-2">
+                      <Popover
+                        open={catalogPickerOpen}
+                        onOpenChange={setCatalogPickerOpen}
+                      >
+                        <PopoverTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="w-[320px] justify-start"
+                          >
+                            Add from catalog
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent align="start" className="w-[360px] p-2">
+                          <Input
+                            value={catalogSearch}
+                            onChange={(e) => setCatalogSearch(e.target.value)}
+                            placeholder="Search by item name..."
+                          />
+                          <div
+                            className="mt-2 max-h-64 overflow-y-auto overscroll-contain space-y-1"
+                            onWheel={(e) => e.stopPropagation()}
+                          >
+                            {filteredCatalogItems.length === 0 ? (
+                              <p className="text-sm text-muted-foreground px-2 py-1">
+                                No catalog items found
+                              </p>
+                            ) : (
+                              filteredCatalogItems.map((item) => (
+                                <Button
+                                  key={item.id}
+                                  type="button"
+                                  variant="ghost"
+                                  className="w-full h-auto py-2 justify-start"
+                                  onClick={() => {
+                                    addCatalogItemRow(item.id);
+                                    setCatalogSearch('');
+                                    setCatalogPickerOpen(false);
+                                  }}
+                                >
+                                  <div className="flex flex-col items-start">
+                                    <span>{item.itemName}</span>
+                                    <span className="text-xs text-muted-foreground">
+                                      {item.itemCode || '-'} | {item.partNo || '-'}
+                                    </span>
+                                  </div>
+                                </Button>
+                              ))
+                            )}
+                          </div>
+                        </PopoverContent>
+                      </Popover>
+                      <Button
+                        variant="outline"
+                        type="button"
+                        onClick={addCustomItemRow}
+                      >
+                        <Plus className="h-4 w-4 mr-1" />
+                        Add Custom Item
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <Table className="table-fixed">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="min-w-16">No</TableHead>
+                          <TableHead className="w-[140px] min-w-[140px] max-w-[140px]">
+                            Group
+                          </TableHead>
+                          <TableHead className="w-[140px] min-w-[140px]">Item</TableHead>
+                          <TableHead className="min-w-44">Part / Code</TableHead>
+                          <TableHead className="min-w-30">Cost (JPY)</TableHead>
+                          <TableHead className="min-w-30">Markup</TableHead>
+                          <TableHead className="min-w-30">
+                            Unit Price (JPY)
+                          </TableHead>
+                          <TableHead className="min-w-20">Qty</TableHead>
+                          <TableHead className="min-w-30">Unit Price</TableHead>
+                          <TableHead className="min-w-30">Amount</TableHead>
+                          <TableHead className="w-12"></TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {itemRows.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={10} className="h-24 text-center">
+                              No invoice items added yet. Use "Add from catalog" or
+                              "Add Custom Item".
+                            </TableCell>
+                          </TableRow>
+                        ) : (
+                          itemRows
+                            .map((row, index) => ({ row, index }))
+                            .sort(
+                              (a, b) =>
+                                toLineNo(a.row.lineNo, Number.MAX_SAFE_INTEGER) -
+                                toLineNo(b.row.lineNo, Number.MAX_SAFE_INTEGER)
+                            )
+                            .map(({ row, index }) => {
+                          const markupMode = row.markupMode ?? formData.markupMode;
+                          const rowMarkupInput = getMarkupInput(row.markupValue);
+                          const markupValue = Math.max(
+                            0,
+                            toFixed2(
+                              (rowMarkupInput ?? formData.markupValue) || 0
+                            )
+                          );
+                          const cost = Math.max(0, toFixed2(row.cost || 0));
+                          const quantity = Math.max(0, toFixed2(row.quantity || 0));
+                          const unitPriceJPY = getUnitPriceJPY(
+                            cost,
+                            markupMode,
+                            markupValue
+                          );
+                          const calculatedUnitPrice = getUnitPrice(
+                            unitPriceJPY,
+                            exchangeRate
+                          );
+                          const lineAmount = toFixed2(calculatedUnitPrice * quantity);
+
+                              return (
+                                <TableRow key={`${index}-${row.itemsCatalogId ?? 'custom'}`}>
+                              <TableCell>
+                                <Input
+                                  type="number"
+                                  min={1}
+                                  step={1}
+                                  value={row.lineNo}
+                                  onChange={(e) =>
+                                    updateItemRow(index, { lineNo: e.target.value })
+                                  }
+                                />
+                              </TableCell>
+                              <TableCell className="w-[140px] max-w-[140px]">
+                                <FieldTooltip
+                                  value={
+                                    itemGroups.find((group) => group.id === row.groupId)
+                                      ?.name || ''
+                                  }
+                                >
+                                  <Select
+                                    value={row.groupId}
+                                    onValueChange={(value) =>
+                                      updateItemRow(index, { groupId: value })
+                                    }
+                                  >
+                                    <SelectTrigger className="w-full min-w-0">
+                                      <SelectValue placeholder="Select group" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {itemGroups.map((group) => (
+                                        <SelectItem key={group.id} value={group.id}>
+                                          {group.name || 'Unnamed Group'}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </FieldTooltip>
+                              </TableCell>
+                              <TableCell>
+                                <FieldTooltip value={row.itemName}>
+                                    <Input
+                                      value={row.itemName}
+                                      onChange={(e) =>
+                                        updateItemRow(index, {
+                                          itemName: e.target.value,
+                                        })
+                                      }
+                                      placeholder="Item name"
+                                    />
+                                </FieldTooltip>
+                                <FieldTooltip value={row.description}>
+                                    <Input
+                                      className="mt-2"
+                                      value={row.description}
+                                      onChange={(e) =>
+                                        updateItemRow(index, {
+                                          description: e.target.value,
+                                        })
+                                      }
+                                      placeholder="Description (optional)"
+                                    />
+                                </FieldTooltip>
+                              </TableCell>
+                              <TableCell>
+                                <FieldTooltip value={row.partNo}>
+                                    <Input
+                                      value={row.partNo}
+                                      onChange={(e) =>
+                                        updateItemRow(index, {
+                                          partNo: e.target.value,
+                                        })
+                                      }
+                                      placeholder="Part no"
+                                    />
+                                </FieldTooltip>
+                                <FieldTooltip value={row.itemCode}>
+                                    <Input
+                                      className="mt-2"
+                                      value={row.itemCode}
+                                      onChange={(e) =>
+                                        updateItemRow(index, {
+                                          itemCode: e.target.value,
+                                        })
+                                      }
+                                      placeholder="Item code"
+                                    />
+                                </FieldTooltip>
+                              </TableCell>
+                              <TableCell>
+                                <Input
+                                  type="number"
+                                  step="0.01"
+                                  min={0}
+                                  value={row.cost}
+                                  onChange={(e) =>
+                                    updateItemRow(index, {
+                                      cost: e.target.value,
+                                    })
+                                  }
+                                />
+                              </TableCell>
+                              <TableCell>
+                                <div className="grid gap-2">
+                                  <Select
+                                    value={markupMode}
+                                    onValueChange={(value) =>
+                                      updateItemRow(index, {
+                                        markupMode: value as MarkupMode,
+                                      })
+                                    }
+                                  >
+                                    <SelectTrigger className="w-24">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="percent">%</SelectItem>
+                                      <SelectItem value="fixed">Fixed</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                  <Input
+                                    type="number"
+                                    step="0.01"
+                                    min={0}
+                                    value={row.markupValue ?? ''}
+                                    placeholder={formData.markupValue}
+                                    onChange={(e) =>
+                                      updateItemRow(index, {
+                                        markupValue: e.target.value,
+                                      })
+                                    }
+                                  />
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                {new Intl.NumberFormat('ja-JP', {
+                                  style: 'currency',
+                                  currency: 'JPY',
+                                }).format(unitPriceJPY)}
+                              </TableCell>
+                              <TableCell>
+                                <Input
+                                  type="number"
+                                  step="1"
+                                  min={0}
+                                  value={row.quantity}
+                                  onChange={(e) =>
+                                    updateItemRow(index, {
+                                      quantity: e.target.value,
+                                    })
+                                  }
+                                />
+                              </TableCell>
+                              <TableCell>
+                                {new Intl.NumberFormat('en-US', {
+                                  style: 'currency',
+                                  currency: formData.currency || 'USD',
+                                }).format(calculatedUnitPrice)}
+                              </TableCell>
+                              <TableCell>
+                                {new Intl.NumberFormat('en-US', {
+                                  style: 'currency',
+                                  currency: formData.currency || 'USD',
+                                }).format(lineAmount)}
+                              </TableCell>
+                              <TableCell>
+                                <Button
+                                  variant="ghost"
+                                  type="button"
+                                  onClick={() => removeItemRow(index)}
+                                >
+                                  <MinusCircle className="h-4 w-4 text-red-600" />
+                                </Button>
+                                {!row.itemsCatalogId && row.itemName.trim() && (
+                                  <Button
+                                    variant="ghost"
+                                    type="button"
+                                    onClick={() => saveRowToCatalog(row, index)}
+                                  >
+                                    <Save className="h-4 w-4 text-blue-600" />
+                                  </Button>
+                                )}
+                              </TableCell>
+                                </TableRow>
+                              );
+                            })
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+
+                <div className="flex justify-end">
+                  <div className="border rounded-md p-4 min-w-72 space-y-2">
+                    <p className="text-sm text-muted-foreground">
+                      Calculated Total
+                    </p>
+                    <p className="text-2xl font-semibold">
+                      {new Intl.NumberFormat('en-US', {
+                        style: 'currency',
+                        currency: formData.currency || 'USD',
+                      }).format(calculatedTotalAmount)}
+                    </p>
+                  </div>
                 </div>
               </div>
               <DialogFooter className="mt-4">
@@ -780,12 +1902,26 @@ export default function Invoices() {
                 >
                   Cancel
                 </Button>
+                {(!editingInvoice || editingInvoice.status === 'draft') && (
+                  <Button
+                    className="min-w-36"
+                    type="submit"
+                    variant="outline"
+                    isLoading={isLoading}
+                    onClick={() => setSubmitStatus('draft')}
+                  >
+                    Save as Draft
+                  </Button>
+                )}
                 <Button
                   className="min-w-36"
                   type="submit"
                   isLoading={isLoading}
+                  onClick={() => setSubmitStatus('pending')}
                 >
-                  {editingInvoice ? 'Update Invoice' : 'Create Invoice'}
+                  {editingInvoice && editingInvoice.status !== 'draft'
+                    ? 'Update Invoice'
+                    : 'Create Invoice'}
                 </Button>
               </DialogFooter>
             </form>

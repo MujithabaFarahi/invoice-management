@@ -18,6 +18,14 @@ import {
 import type { Invoice, PaymentAllocation } from '@/Config/types';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 
 export default function InvoiceDetails() {
   const navigate = useNavigate();
@@ -48,6 +56,8 @@ export default function InvoiceDetails() {
 
   const getStatusBadge = (status: string) => {
     switch (status) {
+      case 'draft':
+        return <Badge className="bg-zinc-600 text-zinc-100">Draft</Badge>;
       case 'paid':
         return <Badge className="bg-green-800 text-green-100">Paid</Badge>;
       case 'partially_paid':
@@ -169,6 +179,22 @@ export default function InvoiceDetails() {
                 }).format(invoice.localBankCharge)}
               </p>
             </div>
+            <div>
+              <p className="text-sm text-muted-foreground">Exchange Rate</p>
+              <p className="font-medium">{invoice.exchangeRate ?? 1}</p>
+            </div>
+            <div>
+              <p className="text-sm text-muted-foreground">Markup</p>
+              <p className="font-medium">
+                {invoice.markupMode ?? 'percent'} / {invoice.markupValue ?? 0}
+              </p>
+            </div>
+            {invoice.remarks && (
+              <div>
+                <p className="text-sm text-muted-foreground">Remarks</p>
+                <p className="font-medium">{invoice.remarks}</p>
+              </div>
+            )}
             {invoice.invoiceLink && (
               <div>
                 <p className="text-sm text-muted-foreground">Invoice File</p>
@@ -183,6 +209,114 @@ export default function InvoiceDetails() {
               </div>
             )}
           </div>
+        </CardContent>
+      </Card>
+      <Card className="mt-6">
+        <CardContent>
+          <CardTitle className="text-lg font-semibold mb-4">Items</CardTitle>
+          {invoice.itemGroups && invoice.itemGroups.length > 0 ? (
+            <div className="space-y-4">
+              {invoice.itemGroups.map((group) => (
+                <div key={group.id} className="border rounded-md p-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="font-medium">{group.name}</p>
+                    <Badge variant={group.isShow ? 'default' : 'secondary'}>
+                      {group.isShow ? 'Show in PDF' : 'Hidden in PDF'}
+                    </Badge>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>No</TableHead>
+                          <TableHead>Item</TableHead>
+                          <TableHead>Part / Code</TableHead>
+                          <TableHead className="text-right">Cost (JPY)</TableHead>
+                          <TableHead className="text-right">Unit Price (JPY)</TableHead>
+                          <TableHead className="text-right">Markup</TableHead>
+                          <TableHead className="text-right">Qty</TableHead>
+                          <TableHead className="text-right">Unit Price</TableHead>
+                          <TableHead className="text-right">Amount</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {[...group.items]
+                          .sort(
+                            (a, b) =>
+                              (a.lineNo ?? Number.MAX_SAFE_INTEGER) -
+                              (b.lineNo ?? Number.MAX_SAFE_INTEGER)
+                          )
+                          .map((item, index) => (
+                          <TableRow key={`${group.id}-${item.itemCode ?? 'item'}-${index}`}>
+                            <TableCell>{item.lineNo ?? index + 1}</TableCell>
+                            <TableCell>
+                              <p>{item.itemName}</p>
+                              {item.description && (
+                                <p className="text-xs text-muted-foreground">
+                                  {item.description}
+                                </p>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <p className="text-xs text-muted-foreground">
+                                Part No: {item.partNo || '-'}
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                Item Code: {item.itemCode || '-'}
+                              </p>
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {new Intl.NumberFormat('ja-JP', {
+                                style: 'currency',
+                                currency: 'JPY',
+                              }).format(item.cost ?? item.unitPriceJPY)}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {new Intl.NumberFormat('ja-JP', {
+                                style: 'currency',
+                                currency: 'JPY',
+                              }).format(item.unitPriceJPY)}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {(() => {
+                                const markupMode = item.markupMode ?? invoice.markupMode;
+                                const markupValue = item.markupValue ?? invoice.markupValue;
+                                if (!markupMode || markupValue === undefined) {
+                                  return '-';
+                                }
+                                if (markupMode === 'percent') {
+                                  return `${markupValue}%`;
+                                }
+                                return new Intl.NumberFormat('ja-JP', {
+                                  style: 'currency',
+                                  currency: 'JPY',
+                                }).format(markupValue);
+                              })()}
+                            </TableCell>
+                            <TableCell className="text-right">{item.quantity}</TableCell>
+                            <TableCell className="text-right">
+                              {new Intl.NumberFormat('en-US', {
+                                style: 'currency',
+                                currency: invoice.currency || 'JPY',
+                              }).format(item.unitPrice)}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {new Intl.NumberFormat('en-US', {
+                                style: 'currency',
+                                currency: invoice.currency || 'JPY',
+                              }).format(item.totalPrice)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-muted-foreground">No line items on this invoice.</p>
+          )}
         </CardContent>
       </Card>
       <Card className="mt-6">
@@ -233,6 +367,18 @@ export default function InvoiceDetails() {
                           }).format(allocation.recievedJPY)}{' '}
                         </p>
                       </div>
+                      <p className="text-xs text-muted-foreground mt-2">
+                        EX Rate: {allocation.exchangeRate || 0} | FBC:{' '}
+                        {new Intl.NumberFormat('ja-JP', {
+                          style: 'currency',
+                          currency: invoice?.currency || 'JPY',
+                        }).format(allocation.foreignBankCharge || 0)}{' '}
+                        | LBC:{' '}
+                        {new Intl.NumberFormat('ja-JP', {
+                          style: 'currency',
+                          currency: 'JPY',
+                        }).format(allocation.localBankCharge || 0)}
+                      </p>
                     </div>
                     <div></div>
                   </div>

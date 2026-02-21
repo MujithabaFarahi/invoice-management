@@ -20,11 +20,90 @@ export interface Invoice {
   currency: string;
   invoiceLink?: string;
   balance: number;
-  status: 'pending' | 'partially_paid' | 'paid';
+  status: 'draft' | 'pending' | 'partially_paid' | 'paid';
   date: Date;
   foreignBankCharge: number;
   localBankCharge: number;
+  exchangeRate?: number;
+  markupMode?: 'percent' | 'fixed';
+  markupValue?: number;
+  itemsPerPage?: number;
+  remarks?: string;
+  bankAccountId?: string;
+  bankAccount?: BankAccountDetails;
+  itemGroups?: InvoiceItemGroup[];
+  templateVersion?: string;
+  documentSource?: 'legacy' | 'system';
   createdAt: Date;
+}
+
+export interface InvoiceItem {
+  lineNo?: number;
+  itemsCatalogId?: string | null;
+  itemName: string;
+  description?: string;
+  partNo?: string;
+  itemCode?: string;
+  cost?: number;
+  unitPriceJPY: number;
+  markupMode?: 'percent' | 'fixed';
+  markupValue?: number;
+  unitPrice: number;
+  quantity: number;
+  totalPrice: number;
+}
+
+export interface InvoiceItemGroup {
+  id: string;
+  name: string;
+  isShow: boolean;
+  items: InvoiceItem[];
+}
+
+export interface InvoiceItemCatalog {
+  id: string;
+  itemName: string;
+  description?: string;
+  partNo?: string;
+  itemCode?: string;
+  defaultUnitPriceJPY: number;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt?: Date;
+}
+
+export interface InvoiceMetadataSettings {
+  id: string;
+  companyName: string;
+  companyAddress: string;
+  phone?: string;
+  fax?: string;
+  logoUrl?: string;
+  bankAccounts?: BankAccountDetails[];
+  bankName?: string;
+  branch?: string;
+  swiftCode?: string;
+  bankAddress?: string;
+  accountName?: string;
+  accountType?: string;
+  accountNumber?: string;
+  bankNotes?: string;
+  signatoryName?: string;
+  signatoryTitle?: string;
+  footerNotes?: string;
+  updatedAt: Date;
+}
+
+export interface BankAccountDetails {
+  id: string;
+  label?: string;
+  bankName?: string;
+  branch?: string;
+  swiftCode?: string;
+  bankAddress?: string;
+  accountName?: string;
+  accountType?: string;
+  accountNumber?: string;
 }
 
 export interface Currency {
