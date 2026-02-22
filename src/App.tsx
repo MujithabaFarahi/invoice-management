@@ -13,6 +13,7 @@ import InvoiceDetails from './Pages/InvoiceDetail';
 import ItemsCatalog from './Pages/ItemsCatalog';
 import SettingsPage from './Pages/Settings';
 import InvoiceMetadataPage from './Pages/InvoiceMetadata';
+import SettingsReconciliationPage from './Pages/SettingsReconciliation';
 
 function App() {
   return (
@@ -40,6 +41,10 @@ function App() {
               <Route
                 path="invoice-metadata"
                 element={<InvoiceMetadataPage />}
+              />
+              <Route
+                path="reconciliation"
+                element={<SettingsReconciliationPage />}
               />
             </Route>
           </Route>

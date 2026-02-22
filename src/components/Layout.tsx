@@ -42,6 +42,10 @@ const navigation = [
         name: 'Invoice Metadata',
         href: '/settings/invoice-metadata',
       },
+      {
+        name: 'Reconciliation',
+        href: '/settings/reconciliation',
+      },
     ],
   },
 ];

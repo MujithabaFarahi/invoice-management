@@ -416,6 +416,19 @@ export const getPaymentAllocations = async (
   });
 };
 
+export const getAllPaymentAllocations = async (): Promise<PaymentAllocation[]> => {
+  const querySnapshot = await getDocs(collection(db, 'paymentAllocations'));
+
+  return querySnapshot.docs.map((doc) => {
+    const data = doc.data();
+    return {
+      id: doc.id,
+      ...data,
+      createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(),
+    } as PaymentAllocation;
+  });
+};
+
 export const getPaymentAllocationsByInvoiceId = async (
   invoiceId: string
 ): Promise<PaymentAllocation[]> => {

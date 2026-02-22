@@ -418,11 +418,48 @@ export default function Invoices() {
     }
   };
 
+  const fetchHistoricalExchangeRate = async (
+    currencyCode: string,
+    invoiceDate: Date
+  ): Promise<number | null> => {
+    if (!currencyCode || currencyCode === 'JPY') {
+      return 1;
+    }
+
+    try {
+      const dateKey = format(invoiceDate, 'yyyy-MM-dd');
+      const response = await fetch(
+        `https://api.frankfurter.app/${dateKey}?from=JPY&to=${currencyCode}`
+      );
+      if (!response.ok) {
+        throw new Error(`Exchange API failed: ${response.status}`);
+      }
+      const data = (await response.json()) as {
+        rates?: Record<string, number>;
+      };
+      const rate = data.rates?.[currencyCode];
+      if (!rate) {
+        return null;
+      }
+      return toFixed4(rate);
+    } catch (error) {
+      console.error('Error fetching historical exchange rate:', error);
+      return null;
+    }
+  };
+
   useEffect(() => {
     if (!isDialogOpen) return;
     if (!formData.currency) return;
+    if (
+      editingInvoice &&
+      typeof editingInvoice.exchangeRate === 'number' &&
+      editingInvoice.exchangeRate > 0
+    ) {
+      return;
+    }
     fetchExchangeRate(formData.currency);
-  }, [formData.currency, isDialogOpen]);
+  }, [editingInvoice, formData.currency, isDialogOpen]);
 
   const activeCatalogItems = catalogItems.filter((item) => item.isActive);
   const filteredCatalogItems = activeCatalogItems.filter((item) =>
@@ -501,6 +538,22 @@ export default function Invoices() {
       .flatMap((group) => group.items)
       .reduce((sum, item) => sum + item.totalPrice, 0)
   );
+  const calculatedTotalCost = toFixed2(
+    computedItemGroups
+      .flatMap((group) => group.items)
+      .reduce((sum, item) => sum + (item.cost ?? 0) * (item.quantity ?? 0), 0)
+  );
+  const calculatedTotalJPY =
+    exchangeRate > 0 ? toFixed2(calculatedTotalAmount / exchangeRate) : 0;
+  const calculatedTotalProfitJPY = toFixed2(
+    calculatedTotalJPY - calculatedTotalCost
+  );
+  const isEditingLegacyInvoice =
+    !!editingInvoice &&
+    (!editingInvoice.itemGroups || editingInvoice.itemGroups.length === 0);
+  const existingLegacyTotalAmount = toFixed2(editingInvoice?.totalAmount ?? 0);
+  const shouldShowExistingLegacyTotal =
+    isEditingLegacyInvoice && calculatedTotalAmount !== existingLegacyTotalAmount;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -536,13 +589,20 @@ export default function Invoices() {
       });
       return;
     }
-    if (computedItemGroups.flatMap((group) => group.items).length === 0) {
+    const computedItemCount = computedItemGroups.flatMap(
+      (group) => group.items
+    ).length;
+    const isEditingLegacyWithoutItems =
+      !!editingInvoice &&
+      (!editingInvoice.itemGroups || editingInvoice.itemGroups.length === 0);
+
+    if (computedItemCount === 0 && !isEditingLegacyWithoutItems) {
       toast.error('Error', {
         description: 'Add at least one invoice item',
       });
       return;
     }
-    if (computedItemGroups.length === 0) {
+    if (computedItemCount > 0 && computedItemGroups.length === 0) {
       toast.error('Error', {
         description: 'Assign invoice items to at least one group',
       });
@@ -557,38 +617,97 @@ export default function Invoices() {
       return;
     }
 
-    const totalAmount = calculatedTotalAmount;
+    const shouldPreserveLegacyTotals =
+      isEditingLegacyWithoutItems && computedItemCount === 0;
+    const shouldKeepLegacyTotalOnItemEdit =
+      isEditingLegacyWithoutItems &&
+      computedItemCount > 0 &&
+      calculatedTotalAmount !== existingLegacyTotalAmount;
+    const isPaidOrPartiallyPaidInvoice =
+      !!editingInvoice &&
+      (editingInvoice.status === 'paid' ||
+        editingInvoice.status === 'partially_paid');
+
+    if (editingInvoice && shouldKeepLegacyTotalOnItemEdit) {
+      toast.error('Cannot update invoice', {
+        description:
+          'Calculated total must match existing total for legacy invoices.',
+      });
+      return;
+    }
+
+    const totalAmount = isPaidOrPartiallyPaidInvoice
+      ? toFixed2(editingInvoice.totalAmount)
+      : (
+      shouldPreserveLegacyTotals || shouldKeepLegacyTotalOnItemEdit
+        ? existingLegacyTotalAmount
+        : calculatedTotalAmount);
     const itemsPerPage = Math.max(
       1,
       Math.floor(Number(formData.itemsPerPage || 20) || 20)
     );
+    const totalCost = shouldPreserveLegacyTotals
+      ? toFixed2(editingInvoice?.totalCost ?? 0)
+      : calculatedTotalCost;
+    const effectiveExchangeRate = exchangeRate;
+    const effectiveCurrency = editingInvoice
+      ? editingInvoice.currency
+      : formData.currency;
+    const totalJPY = shouldPreserveLegacyTotals
+      ? toFixed2(editingInvoice?.totalJPY ?? 0)
+      : effectiveExchangeRate > 0
+        ? toFixed2(totalAmount / effectiveExchangeRate)
+        : 0;
+    const totalProfitJPY = shouldPreserveLegacyTotals
+      ? toFixed2(editingInvoice?.totalProfitJPY ?? 0)
+      : toFixed2(totalJPY - totalCost);
+    const amountPaid = isPaidOrPartiallyPaidInvoice
+      ? toFixed2(editingInvoice.amountPaid ?? 0)
+      : 0;
+    const balance = isPaidOrPartiallyPaidInvoice
+      ? toFixed2(editingInvoice.balance ?? 0)
+      : totalAmount;
+    const recievedJPY = isPaidOrPartiallyPaidInvoice
+      ? toFixed2(editingInvoice.recievedJPY ?? 0)
+      : 0;
+    const foreignBankCharge = isPaidOrPartiallyPaidInvoice
+      ? toFixed2(editingInvoice.foreignBankCharge ?? 0)
+      : 0;
+    const localBankCharge = isPaidOrPartiallyPaidInvoice
+      ? toFixed2(editingInvoice.localBankCharge ?? 0)
+      : 0;
 
     try {
       setIsLoading(true);
-      const finalStatus: Invoice['status'] = submitStatus;
+      const finalStatus: Invoice['status'] = isPaidOrPartiallyPaidInvoice
+        ? editingInvoice.status
+        : submitStatus;
 
       const invoiceData = {
         invoiceNo: formData.invoiceNo,
         customerId: formData.customerId,
         customerName: customer.name,
         invoiceLink: formData.invoiceLink,
+        totalCost,
+        totalJPY,
+        totalProfitJPY,
         totalAmount,
-        amountPaid: 0,
-        currency: formData.currency,
-        balance: totalAmount,
-        recievedJPY: 0,
+        amountPaid,
+        currency: effectiveCurrency,
+        balance,
+        recievedJPY,
         status: finalStatus,
         date: toJapanMidnight(formData.date),
-        foreignBankCharge: 0,
-        localBankCharge: 0,
-        exchangeRate,
+        foreignBankCharge,
+        localBankCharge,
+        exchangeRate: effectiveExchangeRate,
         markupMode: formData.markupMode,
         markupValue: invoiceMarkupValue,
         itemsPerPage,
         remarks: formData.remarks.trim(),
         bankAccountId: selectedBankAccount?.id,
         bankAccount: selectedBankAccount,
-        itemGroups: computedItemGroups,
+        itemGroups: computedItemCount > 0 ? computedItemGroups : undefined,
         templateVersion: 'v1',
         documentSource: 'system' as const,
       };
@@ -652,7 +771,7 @@ export default function Invoices() {
     }
   };
 
-  const handleEdit = (invoice: Invoice) => {
+  const handleEdit = async (invoice: Invoice) => {
     const groupsFromInvoice: InvoiceItemGroupForm[] =
       invoice.itemGroups && invoice.itemGroups.length > 0
         ? invoice.itemGroups.map((group) => ({
@@ -662,6 +781,24 @@ export default function Invoices() {
           }))
         : [createDefaultGroup()];
 
+    let resolvedExchangeRate =
+      typeof invoice.exchangeRate === 'number' && invoice.exchangeRate > 0
+        ? invoice.exchangeRate
+        : null;
+
+    if (!resolvedExchangeRate && invoice.currency !== 'JPY') {
+      const historicalRate = await fetchHistoricalExchangeRate(
+        invoice.currency,
+        new Date(invoice.date)
+      );
+      if (historicalRate) {
+        resolvedExchangeRate = historicalRate;
+        toast('Exchange rate loaded', {
+          description: `Historical rate loaded for ${invoice.currency} on invoice date`,
+        });
+      }
+    }
+
     setEditingInvoice(invoice);
     setFormData({
       invoiceNo: invoice.invoiceNo,
@@ -669,7 +806,7 @@ export default function Invoices() {
       currency: invoice.currency,
       date: new Date(invoice.date),
       invoiceLink: invoice.invoiceLink ?? '',
-      exchangeRate: String(invoice.exchangeRate ?? 1),
+      exchangeRate: String(resolvedExchangeRate ?? 1),
       markupMode: invoice.markupMode ?? 'percent',
       markupValue: String(invoice.markupValue ?? 0),
       itemsPerPage: String(invoice.itemsPerPage ?? 20),
@@ -700,14 +837,7 @@ export default function Invoices() {
 
       setItemRows(groupedRows);
     } else {
-      setItemRows([
-        {
-          ...createEmptyItemRow(groupsFromInvoice[0].id, '1'),
-          itemName: 'Legacy item',
-          cost: String(invoice.totalAmount),
-          quantity: '1',
-        },
-      ]);
+      setItemRows([]);
     }
     setIsDialogOpen(true);
   };
@@ -1092,17 +1222,6 @@ export default function Invoices() {
               <DropdownMenuItem
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (invoice.status === 'paid') {
-                    toast.error('Error', {
-                      description: 'Cannot edit a paid invoice',
-                    });
-                    return;
-                  } else if (invoice.status === 'partially_paid') {
-                    toast.error('Error', {
-                      description: 'Cannot edit a partially paid invoice',
-                    });
-                    return;
-                  }
                   handleEdit(invoice);
                 }}
               >
@@ -1344,9 +1463,10 @@ export default function Invoices() {
                         setFormData({
                           ...formData,
                           customerId: value,
-                          currency:
-                            customers.find((c) => c.id === value)?.currency ||
-                            'USD',
+                          currency: editingInvoice
+                            ? formData.currency
+                            : customers.find((c) => c.id === value)?.currency ||
+                              'USD',
                         })
                       }
                     >
@@ -1374,6 +1494,7 @@ export default function Invoices() {
                       onValueChange={(value) =>
                         setFormData({ ...formData, currency: value })
                       }
+                      disabled={!!editingInvoice}
                     >
                       <SelectTrigger>
                         <SelectValue />
@@ -1880,16 +2001,50 @@ export default function Invoices() {
                 </div>
 
                 <div className="flex justify-end">
-                  <div className="border rounded-md p-4 min-w-72 space-y-2">
-                    <p className="text-sm text-muted-foreground">
-                      Calculated Total
-                    </p>
-                    <p className="text-2xl font-semibold">
-                      {new Intl.NumberFormat('en-US', {
-                        style: 'currency',
-                        currency: formData.currency || 'USD',
-                      }).format(calculatedTotalAmount)}
-                    </p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 w-full max-w-[560px]">
+                    <div className="border rounded-md p-4 min-w-56 space-y-2">
+                      <p className="text-sm text-muted-foreground">Total Cost (JPY)</p>
+                      <p className="text-2xl font-semibold">
+                        {new Intl.NumberFormat('ja-JP', {
+                          style: 'currency',
+                          currency: 'JPY',
+                        }).format(calculatedTotalCost)}
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        Total Profit (JPY):{' '}
+                        {new Intl.NumberFormat('ja-JP', {
+                          style: 'currency',
+                          currency: 'JPY',
+                        }).format(calculatedTotalProfitJPY)}
+                      </p>
+                    </div>
+                    <div className="border rounded-md p-4 min-w-56 space-y-2">
+                      <p className="text-sm text-muted-foreground">
+                        Calculated Total
+                      </p>
+                      <p className="text-2xl font-semibold">
+                        {new Intl.NumberFormat('en-US', {
+                          style: 'currency',
+                          currency: formData.currency || 'USD',
+                        }).format(calculatedTotalAmount)}
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        Total (JPY):{' '}
+                        {new Intl.NumberFormat('ja-JP', {
+                          style: 'currency',
+                          currency: 'JPY',
+                        }).format(calculatedTotalJPY)}
+                      </p>
+                      {shouldShowExistingLegacyTotal && (
+                        <p className="text-sm text-muted-foreground">
+                          Existing Total:{' '}
+                          {new Intl.NumberFormat('en-US', {
+                            style: 'currency',
+                            currency: formData.currency || 'USD',
+                          }).format(existingLegacyTotalAmount)}
+                        </p>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>

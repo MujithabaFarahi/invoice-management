@@ -14,6 +14,9 @@ export interface Invoice {
   invoiceNo: string;
   customerId: string;
   customerName: string;
+  totalCost?: number;
+  totalJPY?: number;
+  totalProfitJPY?: number;
   totalAmount: number;
   amountPaid: number;
   recievedJPY: number;
