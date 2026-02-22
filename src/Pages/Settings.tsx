@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 export default function SettingsPage() {
   const location = useLocation();
   const isInvoiceMetadata = location.pathname.includes('/invoice-metadata');
+  const isReconciliation = location.pathname.includes('/reconciliation');
 
   return (
     <div className="h-screen flex flex-col gap-6 py-6 md:py-8">
@@ -27,6 +28,16 @@ export default function SettingsPage() {
               }`}
             >
               Invoice Metadata
+            </Link>
+            <Link
+              to="/settings/reconciliation"
+              className={`mt-1 block rounded-md px-3 py-2 text-sm ${
+                isReconciliation
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+              }`}
+            >
+              Reconciliation
             </Link>
           </CardContent>
         </Card>
